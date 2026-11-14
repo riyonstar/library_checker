@@ -1,6 +1,3 @@
-# 【GitHubの画面で .github/workflows/check.yml として作成して貼り付ける】
-# 目的: push / プルリクエストのたびに、秘密情報の直書きとテストを自動チェックします。
-# ターミナルは不要です。結果は GitHub の「Actions」タブ(緑✓=OK、赤✗=NG)で見られます。
 name: check
 on:
   push: {}
