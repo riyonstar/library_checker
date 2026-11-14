@@ -1,0 +1,61 @@
+{
+  "_comment": "図書館ごとの設定。図書館を追加するときはここに1件足すだけ(JS側に館名は書かない)。enabled:true の館だけが画面・バックエンドの対象になります。calil.libkeys は『カーリル図書館API』が返す館キー(libkey)の候補。実際のキーは worker 起動後に /api/health で確認できます(README参照)。",
+  "provider": {
+    "id": "calil",
+    "name": "カーリル図書館API",
+    "termsUrl": "https://calil.jp/doc/api_license.html",
+    "refUrl": "https://calil.jp/doc/api_ref.html"
+  },
+  "libraries": [
+    {
+      "id": "kita-chuo",
+      "name": "北区立中央図書館",
+      "shortName": "北区中央図書館",
+      "enabled": true,
+      "sort": 10,
+      "calil": { "systemId": "Tokyo_Kita", "libkeys": ["中央", "中央図書館", "北区立中央図書館"], "libid": null },
+      "officialUrl": "https://www.library.city.kita.tokyo.jp/",
+      "officialUrlVerified": false
+    },
+    {
+      "id": "kita-higashijujo",
+      "name": "北区立東十条図書館",
+      "shortName": "東十条図書館",
+      "enabled": true,
+      "sort": 20,
+      "calil": { "systemId": "Tokyo_Kita", "libkeys": ["東十条", "東十条図書館", "北区立東十条図書館"], "libid": null },
+      "officialUrl": "https://www.library.city.kita.tokyo.jp/",
+      "officialUrlVerified": false
+    },
+    {
+      "id": "kita-akabane",
+      "name": "北区立赤羽図書館",
+      "shortName": "赤羽図書館",
+      "enabled": false,
+      "sort": 30,
+      "calil": { "systemId": "Tokyo_Kita", "libkeys": ["赤羽", "赤羽図書館", "北区立赤羽図書館"], "libid": null },
+      "officialUrl": "https://www.library.city.kita.tokyo.jp/",
+      "officialUrlVerified": false
+    },
+    {
+      "id": "kita-takinogawa",
+      "name": "北区立滝野川図書館",
+      "shortName": "滝野川図書館",
+      "enabled": false,
+      "sort": 40,
+      "calil": { "systemId": "Tokyo_Kita", "libkeys": ["滝野川", "滝野川図書館", "北区立滝野川図書館"], "libid": 103995 },
+      "officialUrl": "https://www.library.city.kita.tokyo.jp/",
+      "officialUrlVerified": false
+    },
+    {
+      "id": "kita-tabata",
+      "name": "北区立田端図書館",
+      "shortName": "田端図書館",
+      "enabled": false,
+      "sort": 50,
+      "calil": { "systemId": "Tokyo_Kita", "libkeys": ["田端", "田端図書館", "北区立田端図書館"], "libid": 103996 },
+      "officialUrl": "https://www.library.city.kita.tokyo.jp/",
+      "officialUrlVerified": false
+    }
+  ]
+}

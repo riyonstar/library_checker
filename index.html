@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>図書館の本を探す｜北区</title>
+  <meta name="description" content="くもんのすいせん図書が北区の図書館にあるか・借りられるかを確認できるアプリ">
+  <meta name="theme-color" content="#4a2f20">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="図書館さがし">
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" type="image/png" href="icon-192.png">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <a class="brand" href="#/" aria-label="ホームへ">
+        <span class="brand-mark" aria-hidden="true">📚</span>
+        <span class="brand-text">図書館の本を探す<small>北区の図書館</small></span>
+      </a>
+      <a class="bell" href="#/notifications" aria-label="通知" id="bell">🔔<span class="badge" id="bell-badge" hidden>0</span></a>
+    </header>
+
+    <div id="mode-banner" class="mode-banner" hidden></div>
+
+    <main id="view" tabindex="-1" aria-live="polite"></main>
+
+    <footer class="attribution" id="attribution"></footer>
+
+    <nav class="tabbar" aria-label="メニュー">
+      <a href="#/" data-tab="home"><span class="ti" aria-hidden="true">🏠</span><span>ホーム</span></a>
+      <a href="#/kumon" data-tab="kumon"><span class="ti" aria-hidden="true">📚</span><span>推薦図書</span></a>
+      <a href="#/search" data-tab="search"><span class="ti" aria-hidden="true">🔍</span><span>検索</span></a>
+      <a href="#/favorites" data-tab="favorites"><span class="ti" aria-hidden="true">❤️</span><span>お気に入り</span></a>
+      <a href="#/libraries" data-tab="libraries"><span class="ti" aria-hidden="true">🏛</span><span>図書館</span></a>
+    </nav>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <noscript><p style="padding:24px">このアプリはJavaScriptが必要です。</p></noscript>
+
+  <!-- 設定・データ。file:// で index.html を直接開いても動くよう <script> で読み込みます -->
+  <script src="config.js"></script>
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+# 【GitHubの画面で .github/workflows/check.yml として作成して貼り付ける】
+# 目的: push / プルリクエストのたびに、秘密情報の直書きとテストを自動チェックします。
+# ターミナルは不要です。結果は GitHub の「Actions」タブ(緑✓=OK、赤✗=NG)で見られます。
+name: check
+on:
+  push: {}
+  pull_request: {}
+  workflow_dispatch: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: 秘密情報の直書きチェック
+        run: node check-secrets.mjs
+      - name: 単体テスト
+        run: node test-worker.mjs
