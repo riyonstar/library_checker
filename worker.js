@@ -473,43 +473,6 @@ async function handleAvailability(ctx, req) {
 }
 
 
-/** 診断用: 書名→ISBN変換の途中経過を返す(公開情報のみ。キーや個人情報は含まない) */
-async function handleDebugIsbn(ctx, req) {
-  const id = new URL(req.url).searchParams.get('id') || '';
-  const books = await loadBooks(ctx);
-  const book = books.get(id);
-  if (!book) return json({ error: 'unknown_book_id', hint: 'id は books.json の id (例: k-5A-01)', booksLoaded: books.size });
-  const title = book.searchTitle || book.title;
-  const first = book.authors?.find((a) => !a.role)?.name || book.authors?.[0]?.name || '';
-  const attempts = first
-    ? [[{ title, creator: first, publisher: book.publisher }, 30], [{ title, publisher: book.publisher }, 100]]
-    : [[{ title, publisher: book.publisher }, 100]];
-  const out = { book: { id, title, first, publisher: book.publisher }, cache: await ctx.env.KV.get(`isbn2:${id}`, 'json'), attempts: [] };
-  for (const [params, cnt] of attempts) {
-    const a = { params, cnt };
-    try {
-      const u = new URL(NDL_OPENSEARCH);
-      for (const [k, v] of Object.entries(params)) if (v) u.searchParams.set(k, v);
-      u.searchParams.set('cnt', String(cnt));
-      const res = await ctx.fetch(u.toString(), { headers: { 'User-Agent': 'kita-library-checker/1.0 (personal PWA)' } });
-      a.http = res.status;
-      const xml = await res.text();
-      a.bytes = xml.length;
-      a.itemTags = (xml.match(/<item[ >]/g) || []).length;
-      a.head = xml.slice(0, 300);
-      const items = parseNdlOpenSearch(xml);
-      a.parsedItems = items.length;
-      a.withIsbn = items.filter((i) => i.isbns.length).length;
-      a.sample = items.slice(0, 4).map((i) => ({ title: i.title, creator: i.creator.slice(0, 40), publisher: i.publisher, isbns: i.isbns }));
-      a.picked = pickIsbns(book, items);
-      const idx = xml.indexOf('dc:identifier');
-      a.identifierSnippet = idx >= 0 ? xml.slice(Math.max(0, idx - 20), idx + 120) : null;
-    } catch (e) { a.error = String(e.message || e); }
-    out.attempts.push(a);
-  }
-  return json(out);
-}
-
 /* ------------------------------------------------------------------ */
 /* /api/search (NDLサーチで自由検索 → ISBN付きの候補を返す)               */
 /* ------------------------------------------------------------------ */
@@ -742,7 +705,6 @@ export async function route(req, env, over = {}) {
     if (url.pathname === '/api/health' && req.method === 'GET') res = await handleHealth(ctx);
     else if (url.pathname === '/api/availability' && req.method === 'POST') res = await handleAvailability(ctx, req);
     else if (url.pathname === '/api/vapid-public-key' && req.method === 'GET') res = json({ key: (await getVapid(ctx)).pub });
-    else if (url.pathname === '/api/debug-isbn' && req.method === 'GET') res = await handleDebugIsbn(ctx, req);
     else if (url.pathname === '/api/search' && req.method === 'GET') res = await handleSearch(ctx, req);
     else if (url.pathname === '/api/sync' && req.method === 'POST') res = await handleSync(ctx, req);
     else if (url.pathname === '/api/unsubscribe' && req.method === 'POST') res = await handleUnsubscribe(ctx, req);
