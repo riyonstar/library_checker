@@ -226,7 +226,8 @@ export function pickIsbns(book, items) {
   const q = normText(book.searchTitle || book.title);
   if (q.length < 2) return [];
   const authorNames = (book.authors || []).map((a) => normText(a.name)).filter((n) => n.length >= 2);
-  const pubQ = normText(book.publisher).replace(/株式会社|出版部/g, '');
+  const stripPub = (x) => normText(x).replace(/株式会社|有限会社|出版部|出版社|出版|発行所|発行/g, '');
+  const pubQ = stripPub(book.publisher);
   const scored = [];
   for (const it of items) {
     if (!it.isbns.length) continue;
@@ -237,7 +238,8 @@ export function pickIsbns(book, items) {
     if (!titleOk) continue;
     const c = normText(it.creator);
     const creatorHit = authorNames.some((n) => c.includes(n));
-    const pubHit = !!pubQ && normText(it.publisher).includes(pubQ);
+    const np = stripPub(it.publisher);
+    const pubHit = pubQ.length >= 2 && (np.includes(pubQ) || (np.length >= 2 && pubQ.includes(np)));
     const score = 1 + (creatorHit ? 2 : 0) + (pubHit ? 2 : 0);
     if (score < 3) continue;   // 書名だけ一致では採用しない(別の同名本を避ける)
     scored.push({ score, pubHit, isbns: it.isbns });
@@ -260,6 +262,9 @@ async function ndlFetch(ctx, params, cnt = 30) {
 
 /** 返り値: ISBN配列(空配列=確かに見つからなかった) / null=今回は解決できなかった(通信失敗・予算切れ。キャッシュしない) */
 export async function resolveIsbns(ctx, book) {
+  // books.json に手入力されたISBN(文字列 または 配列)があれば、検索せずにそれを使う(自動で特定できない本の救済)
+  const manual = (Array.isArray(book.isbn) ? book.isbn : [book.isbn]).map(toIsbn13).filter(Boolean);
+  if (manual.length) return manual.slice(0, MAX_ISBN_PER_BOOK);
   const key = `isbn2:${book.id}`;
   const cached = await ctx.env.KV.get(key, 'json');
   if (cached && (cached.isbns.length || Date.now() - cached.at < ISBN_NEG_CACHE_SEC * 1000)) return cached.isbns;
@@ -272,8 +277,8 @@ export async function resolveIsbns(ctx, book) {
     // そのため「書名+著者+出版社」で絞り込む検索を最初に行い、だめなら条件を緩める。
     const title = book.searchTitle || book.title;
     const attempts = first
-      ? [[{ title, creator: first, publisher: book.publisher }, 30], [{ title, publisher: book.publisher }, 100]]
-      : [[{ title, publisher: book.publisher }, 100]];
+      ? [[{ title, creator: first, publisher: book.publisher }, 30], [{ title, publisher: book.publisher }, 100], [{ title }, 100]]
+      : [[{ title, publisher: book.publisher }, 100], [{ title }, 100]];
     for (const [params, cnt] of attempts) {
       if (isbns.length || ctx.budget.left < 14) break;
       isbns = pickIsbns(book, await ndlFetch(ctx, params, cnt));
@@ -391,7 +396,7 @@ export async function checkItems(ctx, items, libs) {
 /* ------------------------------------------------------------------ */
 async function loadJson(ctx, urlVar, cacheKey) {
   const cached = await ctx.env.KV.get(cacheKey, 'json');
-  if (cached && Date.now() - cached.at < 6 * 3600 * 1000) return cached.data;
+  if (cached && Date.now() - cached.at < 10 * 60 * 1000) return cached.data;
   const url = ctx.env[urlVar];
   if (!url) throw new Error(`${urlVar} が未設定です`);
   ctx.budget.use();
@@ -472,6 +477,46 @@ async function handleAvailability(ctx, req) {
   return json({ source: 'calil', results, isbns: isbnMap, serverTime: nowIso() });
 }
 
+
+
+/** 診断用: 書名(t=)または id= を指定して、書名→ISBN変換の途中経過を返す(公開情報のみ) */
+async function handleDebugIsbn(ctx, req) {
+  if (!(await rateLimit(ctx.env, req, 25))) return json({ error: 'rate_limited' }, 429);
+  const q = new URL(req.url).searchParams;
+  const books = await loadBooks(ctx);
+  let book = books.get(q.get('id') || '');
+  const t = normText(q.get('t') || '');
+  if (!book && t) book = [...books.values()].find((b) => normText(b.title) === t);
+  if (!book) return json({ error: 'unknown_book', hint: 't=書名 または id=k-5A-47 を指定' });
+  const title = book.searchTitle || book.title;
+  const first = book.authors?.find((a) => !a.role)?.name || book.authors?.[0]?.name || '';
+  const attempts = first
+    ? [[{ title, creator: first, publisher: book.publisher }, 30], [{ title, publisher: book.publisher }, 100], [{ title }, 100]]
+    : [[{ title, publisher: book.publisher }, 100], [{ title }, 100]];
+  const q0 = normText(title);
+  const out = { book: { id: book.id, title, first, publisher: book.publisher, isbn: book.isbn }, attempts: [] };
+  for (const [params, cnt] of attempts) {
+    const a = { params, cnt };
+    try {
+      const u = new URL(NDL_OPENSEARCH);
+      for (const [k, v] of Object.entries(params)) if (v) u.searchParams.set(k, v);
+      u.searchParams.set('cnt', String(cnt));
+      const res = await ctx.fetch(u.toString(), { headers: { 'User-Agent': 'kita-library-checker/1.0 (personal PWA)' } });
+      a.http = res.status;
+      const items = parseNdlOpenSearch(await res.text());
+      a.items = items.length;
+      a.withIsbn = items.filter((i) => i.isbns.length).length;
+      a.picked = pickIsbns(book, items);
+      const exact = items.filter((i) => normText(i.title).startsWith(q0));
+      a.titleStartsWithCount = exact.length;
+      a.titleStartsWith = exact.slice(0, 6).map((i) => ({ title: i.title, creator: i.creator.slice(0, 30), publisher: i.publisher, isbns: i.isbns }));
+      if (!exact.length) a.firstTitles = items.slice(0, 5).map((i) => i.title.slice(0, 40));
+    } catch (e) { a.error = String(e.message || e); }
+    out.attempts.push(a);
+    if (a.picked && a.picked.length) break;
+  }
+  return json(out);
+}
 
 /* ------------------------------------------------------------------ */
 /* /api/search (NDLサーチで自由検索 → ISBN付きの候補を返す)               */
@@ -705,6 +750,7 @@ export async function route(req, env, over = {}) {
     if (url.pathname === '/api/health' && req.method === 'GET') res = await handleHealth(ctx);
     else if (url.pathname === '/api/availability' && req.method === 'POST') res = await handleAvailability(ctx, req);
     else if (url.pathname === '/api/vapid-public-key' && req.method === 'GET') res = json({ key: (await getVapid(ctx)).pub });
+    else if (url.pathname === '/api/debug-isbn' && req.method === 'GET') res = await handleDebugIsbn(ctx, req);
     else if (url.pathname === '/api/search' && req.method === 'GET') res = await handleSearch(ctx, req);
     else if (url.pathname === '/api/sync' && req.method === 'POST') res = await handleSync(ctx, req);
     else if (url.pathname === '/api/unsubscribe' && req.method === 'POST') res = await handleUnsubscribe(ctx, req);
