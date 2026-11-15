@@ -251,7 +251,7 @@ export function pickIsbns(book, items) {
 async function ndlFetch(ctx, params) {
   const u = new URL(NDL_OPENSEARCH);
   for (const [k, v] of Object.entries(params)) if (v) u.searchParams.set(k, v);
-  u.searchParams.set('cnt', '20');
+  u.searchParams.set('cnt', '30');
   ctx.budget.use();
   const res = await ctx.fetch(u.toString(), { headers: { 'User-Agent': 'kita-library-checker/1.0 (personal PWA)' } });
   if (!res.ok) throw new Error(`NDL ${res.status}`);
@@ -268,11 +268,15 @@ export async function resolveIsbns(ctx, book) {
   let isbns = [];
   try {
     const first = book.authors?.find((a) => !a.role)?.name || book.authors?.[0]?.name || '';
-    let items = await ndlFetch(ctx, { title: book.searchTitle || book.title, creator: first });
-    isbns = pickIsbns(book, items);
-    if (!isbns.length && ctx.budget.left >= 14) {
-      items = await ndlFetch(ctx, { title: book.searchTitle || book.title, publisher: book.publisher });
-      isbns = pickIsbns(book, items);
+    // NDLは「書名を含む資料」を関連度順に返し、古い資料(ISBNなし)が上位に来やすい。
+    // そのため「書名+著者+出版社」で絞り込む検索を最初に行い、だめなら条件を緩める。
+    const title = book.searchTitle || book.title;
+    const attempts = first
+      ? [{ title, creator: first, publisher: book.publisher }, { title, creator: first }, { title, publisher: book.publisher }]
+      : [{ title, publisher: book.publisher }];
+    for (const params of attempts) {
+      if (isbns.length || ctx.budget.left < 14) break;
+      isbns = pickIsbns(book, await ndlFetch(ctx, params));
     }
   } catch (e) { return null; }
   await ctx.env.KV.put(key, JSON.stringify({ isbns, at: Date.now() }), { expirationTtl: isbns.length ? ISBN_CACHE_SEC : ISBN_NEG_CACHE_SEC });
@@ -370,7 +374,7 @@ export async function checkItems(ctx, items, libs) {
         continue;
       }
       if (systemError[sys]) {
-        out[it.id][lib.id] = { status: STATUS.UNKNOWN, detail: '図書館の情報を取得できませんでした', error: 'upstream', checkedAt, owned: null };
+        out[it.id][lib.id] = { status: STATUS.UNKNOWN, detail: '図書館の情報を取得できませんでした', error: 'upstream', reason: systemError[sys], checkedAt, owned: null };
         continue;
       }
       const sysRes = perSystem[sys];
