@@ -7,17 +7,13 @@ main = "worker.js"
 compatibility_date = "2025-01-01"
 
 [vars]
-# GitHub Pages のオリジン(パスは含めない)。複数ならカンマ区切り。
-ALLOWED_ORIGIN = "https://YOUR-GITHUB-USER.github.io"
-# 公開済みの books.json / libraries.json のURL
-BOOKS_URL = "https://YOUR-GITHUB-USER.github.io/YOUR-REPO/books.json"
-LIBRARIES_URL = "https://YOUR-GITHUB-USER.github.io/YOUR-REPO/libraries.json"
-# (Web Push の連絡先は ALLOWED_ORIGIN のURLを自動で使います。個人のメールアドレスは書かないでください)
+ALLOWED_ORIGIN = "https://riyonstar.github.io"
+BOOKS_URL = "https://riyonstar.github.io/library_checker/books.json"
+LIBRARIES_URL = "https://riyonstar.github.io/library_checker/libraries.json"
 
 [[kv_namespaces]]
 binding = "KV"
-id = "REPLACE_WITH_KV_NAMESPACE_ID"   # Cloudflareの画面(Storage & Databases → KV → Create)で作成し、そのIDを書く(IDは秘密ではありません)
+id = "8cc1f3ddd8a64add978495b9ba54538d"
 
 [triggers]
-# 毎時30分に1回、お気に入りの在架状況をチェック(図書館への負荷を抑えるため頻度は低め)
 crons = ["30 * * * *"]
