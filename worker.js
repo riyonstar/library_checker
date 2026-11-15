@@ -252,7 +252,6 @@ async function ndlFetch(ctx, params) {
   const u = new URL(NDL_OPENSEARCH);
   for (const [k, v] of Object.entries(params)) if (v) u.searchParams.set(k, v);
   u.searchParams.set('cnt', '20');
-  u.searchParams.set('mediatype', '1');
   ctx.budget.use();
   const res = await ctx.fetch(u.toString(), { headers: { 'User-Agent': 'kita-library-checker/1.0 (personal PWA)' } });
   if (!res.ok) throw new Error(`NDL ${res.status}`);
