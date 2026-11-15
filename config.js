@@ -4,7 +4,7 @@
  *                   空のままなら「モックモード」(仮データ)で動きます。
  */
 (self.APP_CONFIG = {
-  BACKEND_URL: "",
+  BACKEND_URL: "https://kita-library.kita-lib-app.workers.dev",
   // 画面に表示する図書館データの出典
   ATTRIBUTION: { name: "カーリル図書館API", url: "https://calil.jp/" }
 });
