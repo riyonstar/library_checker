@@ -27,7 +27,7 @@ const NDL_OPENSEARCH = 'https://ndlsearch.ndl.go.jp/api/opensearch';
 const AVAIL_CACHE_SEC = 10 * 60;      // 画面からの問い合わせは10分キャッシュ(結果に実際の確認時刻を付けて返す)
 const MIN_REFETCH_SEC = 120;          // どれだけ「最新」を連打されても同じ本は2分に1回しかカーリルへ聞かない
 const ISBN_CACHE_SEC = 30 * 24 * 3600;
-const ISBN_NEG_CACHE_SEC = 24 * 3600;
+const ISBN_NEG_CACHE_SEC = 3 * 3600;
 const MAX_ITEMS_PER_REQUEST = 30;
 const MAX_ISBN_PER_BOOK = 4;
 const CALIL_BATCH = 40;               // 1セッションで問い合わせるISBN数(上限は100)
@@ -248,10 +248,10 @@ export function pickIsbns(book, items) {
   return out.slice(0, MAX_ISBN_PER_BOOK);
 }
 
-async function ndlFetch(ctx, params) {
+async function ndlFetch(ctx, params, cnt = 30) {
   const u = new URL(NDL_OPENSEARCH);
   for (const [k, v] of Object.entries(params)) if (v) u.searchParams.set(k, v);
-  u.searchParams.set('cnt', '30');
+  u.searchParams.set('cnt', String(cnt));
   ctx.budget.use();
   const res = await ctx.fetch(u.toString(), { headers: { 'User-Agent': 'kita-library-checker/1.0 (personal PWA)' } });
   if (!res.ok) throw new Error(`NDL ${res.status}`);
@@ -260,7 +260,7 @@ async function ndlFetch(ctx, params) {
 
 /** 返り値: ISBN配列(空配列=確かに見つからなかった) / null=今回は解決できなかった(通信失敗・予算切れ。キャッシュしない) */
 export async function resolveIsbns(ctx, book) {
-  const key = `isbn:${book.id}`;
+  const key = `isbn2:${book.id}`;
   const cached = await ctx.env.KV.get(key, 'json');
   if (cached && (cached.isbns.length || Date.now() - cached.at < ISBN_NEG_CACHE_SEC * 1000)) return cached.isbns;
   // カーリルへの問い合わせ用に予算を残す
@@ -272,11 +272,11 @@ export async function resolveIsbns(ctx, book) {
     // そのため「書名+著者+出版社」で絞り込む検索を最初に行い、だめなら条件を緩める。
     const title = book.searchTitle || book.title;
     const attempts = first
-      ? [{ title, creator: first, publisher: book.publisher }, { title, creator: first }, { title, publisher: book.publisher }]
-      : [{ title, publisher: book.publisher }];
-    for (const params of attempts) {
+      ? [[{ title, creator: first, publisher: book.publisher }, 30], [{ title, publisher: book.publisher }, 100]]
+      : [[{ title, publisher: book.publisher }, 100]];
+    for (const [params, cnt] of attempts) {
       if (isbns.length || ctx.budget.left < 14) break;
-      isbns = pickIsbns(book, await ndlFetch(ctx, params));
+      isbns = pickIsbns(book, await ndlFetch(ctx, params, cnt));
     }
   } catch (e) { return null; }
   await ctx.env.KV.put(key, JSON.stringify({ isbns, at: Date.now() }), { expirationTtl: isbns.length ? ISBN_CACHE_SEC : ISBN_NEG_CACHE_SEC });
@@ -466,7 +466,7 @@ async function handleAvailability(ctx, req) {
   const isbnMap = {};
   for (const it of reqItems) {
     const id = String(it.id || '');
-    const c = await ctx.env.KV.get(`isbn:${id}`, 'json');
+    const c = await ctx.env.KV.get(`isbn2:${id}`, 'json');
     isbnMap[id] = c?.isbns || (Array.isArray(it.isbns) ? it.isbns.map(toIsbn13).filter(Boolean) : []);
   }
   return json({ source: 'calil', results, isbns: isbnMap, serverTime: nowIso() });
