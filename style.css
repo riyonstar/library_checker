@@ -220,3 +220,20 @@ h1, h2, h3 { font-family: var(--serif); margin: 0; }
 .add-row { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; background: var(--paper-2); border: 1px solid #cdb98c; border-top: 0; border-radius: 0 0 12px 12px; padding: 8px 10px; margin-top: -6px; font-size: 14px; }
 .add-row label { display: grid; gap: 2px; font-size: 12px; font-weight: 700; color: var(--ink-soft); flex: 1; min-width: 130px; }
 .cover.none { display: grid; place-items: center; width: 72px; height: 96px; border: 2px dashed #b79d6c; border-radius: 4px; color: var(--ink-soft); font-size: 11px; text-align: center; line-height: 1.3; background: var(--paper-2); }
+
+/* 表紙ラベル印刷 */
+.menu .m5 { background: #6b5a2e; grid-column: 1 / -1; }
+.lab-field { display: grid; gap: 2px; font-size: 13px; font-weight: 700; color: var(--ink-soft); margin: 8px 0; }
+.lab-field select { width: 100%; min-height: 44px; border-radius: 10px; border: 2px solid #b79d6c; background: #fffdf7; color: var(--ink); font-size: 15px; padding: 0 6px; font-family: var(--sans); }
+.lab-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+.lab-list { list-style: none; margin: 8px 0; padding: 0; max-height: 320px; overflow: auto; border: 1px solid #cdb98c; border-radius: 10px; background: #fffdf7; }
+.lab-row { display: flex; gap: 10px; align-items: center; min-height: 44px; padding: 4px 10px; border-bottom: 1px solid #eee2c4; font-size: 15px; }
+.lab-row input { width: 22px; height: 22px; flex: none; }
+.lab-row small, .lab-skip small { color: var(--ink-soft); margin-left: 6px; font-size: 12px; }
+.lab-opts { border: 1px solid #cdb98c; border-radius: 10px; padding: 8px 10px; margin: 10px 0; display: grid; gap: 8px; }
+.lab-opts legend { font-weight: 700; font-size: 13px; padding: 0 4px; }
+.lab-opts label { display: flex; gap: 8px; align-items: center; min-height: 36px; }
+.lab-thumbs { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0; }
+.lab-thumbs img { width: 52px; height: 52px; border: 1px solid #b79d6c; background: #fff; }
+.lab-skip { margin-top: 8px; font-size: 14px; }
+.lab-skip ul { margin: 6px 0 0 18px; }

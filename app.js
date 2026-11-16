@@ -6,7 +6,7 @@
 'use strict';
 
 /* ================= 設定・データ ================= */
-const APP_VERSION = '2026-11-16 d(表紙=Google)';
+const APP_VERSION = '2026-11-17 e(日本語版+ラベル印刷)';
 const CFG = self.APP_CONFIG || {};
 const BACKEND = (CFG.BACKEND_URL || '').replace(/\/+$/, '');
 const HAS_BACKEND = !!BACKEND;
@@ -397,6 +397,7 @@ function homeView() {
     <a class="m2" href="#/search"><span class="em" aria-hidden="true">🔍</span>本を検索<small>書名・著者名</small></a>
     <a class="m3" href="#/favorites"><span class="em" aria-hidden="true">❤️</span>お気に入り<small>${favCount}冊</small></a>
     <a class="m4" href="#/libraries"><span class="em" aria-hidden="true">🏛</span>図書館<small>${selectedLibs().map((l) => esc(l.shortName || l.name)).join('・')}</small></a>
+    <a class="m5" href="#/labels"><span class="em" aria-hidden="true">🖨</span>表紙ラベル印刷<small>25mm角・A4のPDF</small></a>
   </nav>
   ${unreadCount() ? `<div class="notice" style="margin-top:14px">🔔 未読の通知が${unreadCount()}件あります。<a href="#/notifications">見る</a></div>` : ''}
   <p class="muted on-wood" style="margin:14px 4px">対象: ${selectedLibs().map((l) => esc(l.name)).join('、')}。「貸出中」→「在架」になったら、お気に入りの本をお知らせします。</p>`;
@@ -434,7 +435,7 @@ function kumonView(route) {
   return `
   <h1 class="page-title">📚 くもんの推薦図書</h1>
   <div class="chips" role="group" aria-label="レベル">${levels.map((lv) => `<button class="chip" data-level="${esc(lv)}" aria-pressed="${lv === level}">${esc(levelLabel(lv))}</button>`).join('')}</div>
-  <div class="toolbar">${checkButton()}</div>
+  <div class="toolbar">${checkButton()} <button class="btn small secondary" data-label-open="lv:${esc(level)}">🖨 ラベル印刷</button></div>
   ${filterBarHtml()}
   <h2 class="shelf-title">${level === OTHER ? '推薦図書以外' : 'レベル ' + esc(level)}（${filtersActive() ? `${list.length}/${all.length}` : all.length}冊）</h2>
   ${filtersActive() ? '<p class="muted on-wood" style="margin:0 4px 8px">絞り込み中です。まだ確認していない本は「不明」として扱います。</p>' : ''}
@@ -609,6 +610,104 @@ function bookView(id) {
 }
 
 /* ================= ルーティング ================= */
+/* ================= 表紙ラベル印刷(25mm角・A4・PDF) ================= */
+const labelUi = { src: 'fav', sel: null, mode: 'contain', cut: true, busy: false, result: null };
+const labelSources = () => [['fav', 'お気に入り'], ['read', '読んだ本'], ...LEVELS.map((lv) => [`lv:${lv}`, `推薦図書 ${lv}`]), ['lv:other', '推薦図書以外(追加した本)']];
+const isbnsOf = (b) => (state.isbns[b.id] || b.isbns || []);
+function labelCandidates(src) {
+  if (src === 'fav') return Object.keys(state.fav).map(getBook).filter(Boolean);
+  if (src === 'read') return Object.keys(state.read).map(getBook).filter(Boolean);
+  const lv = src.replace(/^lv:/, '');
+  return [...BOOKS.filter((b) => b.level === lv), ...customBooks(lv)];
+}
+function labelsView() {
+  const lay = self.Labels.layout();
+  const list = labelCandidates(labelUi.src);
+  if (!labelUi.sel) labelUi.sel = new Set(list.map((b) => b.id));
+  const picked = list.filter((b) => labelUi.sel.has(b.id));
+  const pages = Math.max(1, Math.ceil(picked.length / lay.perPage));
+  const r = labelUi.result;
+  return `
+  <h1 class="page-title">🖨 表紙ラベル印刷</h1>
+  <section class="panel">
+    <p>選んだ本の表紙を、<b>25mm角</b>のラベルにして、A4のPDFを作ります(1ページ ${lay.perPage}枚 = ${lay.cols}列×${lay.rows}行)。印刷は <b>「100%(実際のサイズ)」</b>で行ってください(「用紙に合わせる」だと25mmになりません)。</p>
+    <label class="lab-field"><span>本の選び方</span>
+      <select data-label-src>${labelSources().map(([v, l]) => `<option value="${esc(v)}" ${labelUi.src === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
+    <div class="lab-actions">
+      <button class="btn small secondary" data-label-all>すべて選ぶ</button>
+      <button class="btn small secondary" data-label-none>すべて外す</button>
+      <span class="muted">${picked.length}/${list.length}冊 → ${pages}ページ</span>
+    </div>
+    ${list.length ? `<ul class="lab-list">${list.map((b) => `<li><label class="lab-row"><input type="checkbox" data-label-pick="${esc(b.id)}" ${labelUi.sel.has(b.id) ? 'checked' : ''}><span>${esc(b.title)}${isbnsOf(b).length ? '' : '<small>(ISBN未確認)</small>'}</span></label></li>`).join('')}</ul>` : '<p class="empty" style="color:inherit;padding:10px 0">この選び方には、本がありません。</p>'}
+    <fieldset class="lab-opts"><legend>表紙の入れ方</legend>
+      <label><input type="radio" name="label-mode" value="contain" ${labelUi.mode === 'contain' ? 'checked' : ''}> 表紙全体を入れる(余白は白)</label>
+      <label><input type="radio" name="label-mode" value="crop" ${labelUi.mode === 'crop' ? 'checked' : ''}> 正方形に切り抜く(はみ出しは切れます)</label>
+      <label><input type="checkbox" id="label-cut" ${labelUi.cut ? 'checked' : ''}> 切り取り線を入れる</label>
+    </fieldset>
+    <button class="btn block" data-label-make ${labelUi.busy || !picked.length ? 'disabled' : ''}>${labelUi.busy ? '作成中…' : '📄 PDFを作る'}</button>
+    <p class="muted" id="label-progress" role="status"></p>
+    ${r ? labelResultHtml(r) : ''}
+    <p class="muted" style="margin-top:10px">表紙は Google ブックスの画像です。取得できない場合は、画像を中継するサービス(images.weserv.nl)を経由します(画像のURL=ISBNが送られます。書名や利用者の情報は送りません)。</p>
+  </section>`;
+}
+function labelResultHtml(r) {
+  const skipped = r.skipped.length ? `<details class="lab-skip" open><summary>⚠ ${r.skipped.length}冊は含まれていません</summary><ul>${r.skipped.map((s) => `<li>${esc(s.b.title)} <small>— ${esc(s.why)}</small></li>`).join('')}</ul></details>` : '';
+  if (r.empty) return `<div class="notice">表紙を取得できた本がありませんでした。</div>${skipped}`;
+  return `<div class="lab-result"><p>✅ ${r.count}枚・${r.pages}ページのPDFができました。</p>
+    <div class="lab-actions"><a class="btn" href="${esc(r.url)}" target="_blank" rel="noopener">📄 PDFを開く(印刷)</a><a class="btn secondary" href="${esc(r.url)}" download="${esc(r.name)}">保存</a></div>
+    <div class="lab-thumbs" aria-label="仕上がりの確認">${r.thumbs.map((t) => `<img src="${esc(t)}" alt="">`).join('')}</div></div>${skipped}`;
+}
+/* 表示中の本のうち、ISBNが分かっていないものを Worker に調べてもらう(少しずつ・混雑時は待つ) */
+async function fillIsbns(ids, onTick) {
+  let todo = ids.filter((id) => !(state.isbns[id] || []).length);
+  let busy = 0;
+  for (let round = 0; todo.length && round < 60; round++) {
+    let res;
+    try { res = await api('/api/isbns', { method: 'POST', body: { ids: todo.slice(0, 80), resolve: round > 0 }, timeout: 40000 }); } catch { break; }
+    for (const [id, list] of Object.entries(res.isbns || {})) if (list.length) state.isbns[id] = list;
+    persist.isbns();
+    todo = todo.filter((id) => !(state.isbns[id] || []).length);
+    if (onTick) onTick(todo.length);
+    if (round === 0) continue;
+    if (res.busy) { if (++busy >= 3) break; await sleep(8000); } else if (res.pending <= 0) break; else await sleep(900);
+  }
+}
+async function makeLabels() {
+  if (labelUi.busy) return;
+  const list = labelCandidates(labelUi.src).filter((b) => labelUi.sel.has(b.id));
+  if (!list.length) { toast('本を選んでください'); return; }
+  if (labelUi.result?.url) URL.revokeObjectURL(labelUi.result.url);
+  labelUi.busy = true; labelUi.result = null; renderRoute({ keepScroll: true });
+  const prog = (t) => { const el = $('#label-progress'); if (el) el.textContent = t; };
+  const skipped = [];
+  try {
+    const need = list.filter((b) => !isbnsOf(b).length && BOOK_BY_ID.has(b.id));
+    if (need.length && HAS_BACKEND && !useMock()) await fillIsbns(need.map((b) => b.id), (n) => prog(`ISBNを調べています… 残り${n}冊`));
+    const ready = [];
+    for (const b of list) { const isbns = isbnsOf(b); if (isbns.length) ready.push({ b, isbns }); else skipped.push({ b, why: 'ISBNが分かりません' }); }
+    const out = new Array(ready.length);
+    let next = 0, done = 0;
+    const worker = async () => {
+      for (;;) {
+        const i = next++; if (i >= ready.length) return;
+        const { b, isbns } = ready[i];
+        const img = await self.Labels.fetchCover(isbns);
+        if (img) out[i] = { b, image: self.Labels.toSquare(img, labelUi.mode) }; else skipped.push({ b, why: '表紙画像が見つかりません' });
+        prog(`表紙を取得中… ${++done}/${ready.length}`);
+      }
+    };
+    await Promise.all(Array.from({ length: 4 }, worker));
+    const got = out.filter(Boolean);
+    if (!got.length) labelUi.result = { empty: true, skipped };
+    else {
+      const { bytes, pageCount } = self.Labels.buildPdf(got, { cutLines: labelUi.cut });
+      const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+      labelUi.result = { url, pages: pageCount, count: got.length, skipped, thumbs: got.map((x) => x.image), name: `ehon-labels-${new Date().toISOString().slice(0, 10)}.pdf` };
+    }
+  } catch (e) { toast('PDFを作れませんでした: ' + (e.message || e)); }
+  finally { labelUi.busy = false; if (parseRoute().name === 'labels') renderRoute({ keepScroll: true }); }
+}
+
 function parseRoute() {
   const raw = location.hash.replace(/^#/, '') || '/';
   const [path, qs] = raw.split('?');
@@ -618,11 +717,11 @@ function parseRoute() {
   if (name === 'book') return { name, id: decodeURIComponent(parts[1] || ''), q };
   return { name, q };
 }
-const TABS = { home: 'home', kumon: 'kumon', search: 'search', favorites: 'favorites', libraries: 'libraries', book: null, notifications: null };
+const TABS = { home: 'home', kumon: 'kumon', search: 'search', favorites: 'favorites', libraries: 'libraries', labels: null, book: null, notifications: null };
 
 function renderRoute({ keepScroll = false } = {}) {
   const route = parseRoute();
-  const map = { home: homeView, kumon: kumonView, search: searchView, favorites: favoritesView, libraries: librariesView, notifications: notificationsView };
+  const map = { home: homeView, kumon: kumonView, search: searchView, favorites: favoritesView, libraries: librariesView, labels: labelsView, notifications: notificationsView };
   let html;
   if (route.name === 'book') html = bookView(route.id);
   else html = (map[route.name] || homeView)(route);
@@ -660,6 +759,10 @@ document.addEventListener('click', async (ev) => {
   if (t.dataset.read) { ev.preventDefault(); toggleRead(t.dataset.read); return; }
   if (t.dataset.add) { ev.preventDefault(); const s = document.querySelector(`select[data-add-level="${CSS.escape(t.dataset.add)}"]`); addToList(t.dataset.add, s ? s.value : OTHER); return; }
   if (t.dataset.unadd) { ev.preventDefault(); removeFromList(t.dataset.unadd); return; }
+  if (t.dataset.labelOpen) { ev.preventDefault(); labelUi.src = t.dataset.labelOpen; labelUi.sel = null; labelUi.result = null; location.hash = '#/labels'; return; }
+  if (t.dataset.labelAll !== undefined) { ev.preventDefault(); labelUi.sel = new Set(labelCandidates(labelUi.src).map((b) => b.id)); renderRoute({ keepScroll: true }); return; }
+  if (t.dataset.labelNone !== undefined) { ev.preventDefault(); labelUi.sel = new Set(); renderRoute({ keepScroll: true }); return; }
+  if (t.dataset.labelMake !== undefined) { ev.preventDefault(); await makeLabels(); return; }
   if (t.dataset.check) {
     ev.preventDefault();
     // 推薦図書ページは、絞り込みで隠れている本も含めて、そのレベル全体を確認する(絞り込みの結果を正しくするため)
@@ -704,6 +807,10 @@ document.addEventListener('submit', async (ev) => {
 });
 document.addEventListener('change', (ev) => {
   const t = ev.target;
+  if (t.dataset?.labelSrc !== undefined) { labelUi.src = t.value; labelUi.sel = null; labelUi.result = null; renderRoute({ keepScroll: true }); return; }
+  if (t.dataset?.labelPick) { if (t.checked) labelUi.sel.add(t.dataset.labelPick); else labelUi.sel.delete(t.dataset.labelPick); renderRoute({ keepScroll: true }); return; }
+  if (t.name === 'label-mode') { labelUi.mode = t.value; return; }
+  if (t.id === 'label-cut') { labelUi.cut = t.checked; return; }
   if (t.dataset?.filter) {
     state.settings.filters = { ...filters(), [t.dataset.filter]: t.value }; persist.settings();
     renderRoute({ keepScroll: true });

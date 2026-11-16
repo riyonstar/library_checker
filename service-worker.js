@@ -5,9 +5,9 @@
  *
  * ファイルを更新したら CACHE_VERSION を上げてください。
  */
-const CACHE_VERSION = 'kitalib-v5';
+const CACHE_VERSION = 'kitalib-v6';
 const APP_SHELL = [
-  './', 'index.html', 'style.css', 'app.js', 'config.js', 'data.js',
+  './', 'index.html', 'style.css', 'app.js', 'labels.js', 'config.js', 'data.js',
   'books.json', 'libraries.json', 'manifest.json',
   'icon-192.png', 'icon-512.png', 'apple-touch-icon.png',
 ];

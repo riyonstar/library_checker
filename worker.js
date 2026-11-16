@@ -216,6 +216,7 @@ export function parseNdlOpenSearch(xml) {
       title: (pick('title')[0] || '').trim(),
       creator: pick('dc:creator').join(' ') || pick('author').join(' '),
       publisher: pick('dc:publisher').join(' '),
+      languages: pick('dc:language').map((x) => x.trim().toLowerCase()).filter(Boolean),
       isbns: [...new Set(ids)],
     });
   }
@@ -231,6 +232,9 @@ export function pickIsbns(book, items) {
   const scored = [];
   for (const it of items) {
     if (!it.isbns.length) continue;
+    // 日本語版だけを採用する(言語が書かれていて、日本語でない資料=英語版などは除外)
+    const langs = it.languages || [];
+    if (langs.length && !langs.some((l) => /^(jpn|ja)/.test(l))) continue;
     // 書名の一致: 「全体」または「副題(: / ( など)より前」が検索書名と一致。巻数(1,2,上,下…)の付加だけ許す。
     // 例) 「ぐりとぐら」に対して「ぐりとぐらのおきゃくさま」は別の本なので除外する
     const variants = [normText(it.title), normText(String(it.title).split(/[:：\/／(（\[［〔【]/)[0])];
@@ -242,9 +246,9 @@ export function pickIsbns(book, items) {
     const pubHit = pubQ.length >= 2 && (np.includes(pubQ) || (np.length >= 2 && pubQ.includes(np)));
     const score = 1 + (creatorHit ? 2 : 0) + (pubHit ? 2 : 0);
     if (score < 3) continue;   // 書名だけ一致では採用しない(別の同名本を避ける)
-    scored.push({ score, pubHit, isbns: it.isbns });
+    scored.push({ score, pubHit, jp: langs.some((l) => /^(jpn|ja)/.test(l)) ? 1 : 0, isbns: it.isbns });
   }
-  scored.sort((a, b) => b.score - a.score);
+  scored.sort((a, b) => (b.score + b.jp) - (a.score + a.jp));   // 日本語と明記された資料を優先
   const out = [];
   for (const s of scored) for (const i of s.isbns) if (!out.includes(i)) out.push(i);
   return out.slice(0, MAX_ISBN_PER_BOOK);
@@ -265,7 +269,7 @@ export async function resolveIsbns(ctx, book) {
   // books.json に手入力されたISBN(文字列 または 配列)があれば、検索せずにそれを使う(自動で特定できない本の救済)
   const manual = (Array.isArray(book.isbn) ? book.isbn : [book.isbn]).map(toIsbn13).filter(Boolean);
   if (manual.length) return manual.slice(0, MAX_ISBN_PER_BOOK);
-  const key = `isbn2:${book.id}`;
+  const key = `isbn3:${book.id}`;
   const cached = await ctx.env.KV.get(key, 'json');
   if (cached && (cached.isbns.length || Date.now() - cached.at < ISBN_NEG_CACHE_SEC * 1000)) return cached.isbns;
   // カーリルへの問い合わせ用に予算を残す
@@ -471,7 +475,7 @@ async function handleAvailability(ctx, req) {
   const isbnMap = {};
   for (const it of reqItems) {
     const id = String(it.id || '');
-    const c = await ctx.env.KV.get(`isbn2:${id}`, 'json');
+    const c = await ctx.env.KV.get(`isbn3:${id}`, 'json');
     isbnMap[id] = c?.isbns || (Array.isArray(it.isbns) ? it.isbns.map(toIsbn13).filter(Boolean) : []);
   }
   return json({ source: 'calil', results, isbns: isbnMap, serverTime: nowIso() });
@@ -509,7 +513,7 @@ async function handleDebugIsbn(ctx, req) {
       a.picked = pickIsbns(book, items);
       const exact = items.filter((i) => normText(i.title).startsWith(q0));
       a.titleStartsWithCount = exact.length;
-      a.titleStartsWith = exact.slice(0, 6).map((i) => ({ title: i.title, creator: i.creator.slice(0, 30), publisher: i.publisher, isbns: i.isbns }));
+      a.titleStartsWith = exact.slice(0, 6).map((i) => ({ title: i.title, creator: i.creator.slice(0, 30), publisher: i.publisher, lang: i.languages, isbns: i.isbns }));
       if (!exact.length) a.firstTitles = items.slice(0, 5).map((i) => i.title.slice(0, 40));
     } catch (e) { a.error = String(e.message || e); }
     out.attempts.push(a);
@@ -535,8 +539,8 @@ async function handleSetIsbn(ctx, req) {
   const isbns = [...new Set(raw.map(toIsbn13).filter(Boolean))].slice(0, MAX_ISBN_PER_BOOK);
   if (String(body.isbns || '').trim() && !isbns.length) return json({ error: 'bad_isbn', message: 'ISBNの形式が正しくありません(10桁または13桁の数字)' }, 400);
   if (!(await rateLimit(ctx.env, req, 5))) return json({ error: 'rate_limited' }, 429);
-  if (isbns.length) await ctx.env.KV.put(`isbn2:${id}`, JSON.stringify({ isbns, at: Date.now(), manual: true }), { expirationTtl: 400 * 24 * 3600 });
-  else await ctx.env.KV.delete(`isbn2:${id}`);   // 空欄で登録 = 手入力を取り消す
+  if (isbns.length) await ctx.env.KV.put(`isbn3:${id}`, JSON.stringify({ isbns, at: Date.now(), manual: true }), { expirationTtl: 400 * 24 * 3600 });
+  else await ctx.env.KV.delete(`isbn3:${id}`);   // 空欄で登録 = 手入力を取り消す
   await ctx.env.KV.delete(`av:${id}`);            // 古い確認結果を捨てる
   return json({ ok: true, id, isbns });
 }
@@ -560,7 +564,7 @@ async function handleIsbns(ctx, req) {
     if (!b) continue;
     const manual = (Array.isArray(b.isbn) ? b.isbn : [b.isbn]).map(toIsbn13).filter(Boolean);
     if (manual.length) { isbns[id] = manual.slice(0, MAX_ISBN_PER_BOOK); continue; }
-    const cached = await ctx.env.KV.get(`isbn2:${id}`, 'json');
+    const cached = await ctx.env.KV.get(`isbn3:${id}`, 'json');
     if (cached?.isbns?.length) isbns[id] = cached.isbns;
     else if (!cached) missing.push(id);
   }
