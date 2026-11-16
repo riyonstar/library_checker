@@ -6,6 +6,7 @@
 'use strict';
 
 /* ================= 設定・データ ================= */
+const APP_VERSION = '2026-11-16 d(表紙=Google)';
 const CFG = self.APP_CONFIG || {};
 const BACKEND = (CFG.BACKEND_URL || '').replace(/\/+$/, '');
 const HAS_BACKEND = !!BACKEND;
@@ -864,7 +865,7 @@ async function boot() {
   try { await loadData(); } catch (e) { $('#view').innerHTML = '<p class="empty">データを読み込めませんでした。</p>'; return; }
   Object.values(state.custom).forEach((c) => { if (!BOOK_BY_ID.has(c.book.id)) EXT.set(c.book.id, { ...c.book, customLevel: c.level }); });
   loadAvail(); updateBanner(); updateBell();
-  $('#attribution').innerHTML = `くもんのすいせん図書 2026年度版(公文教育研究会)の掲載図書より作成 ／ 蔵書情報: <a href="${esc(CFG.ATTRIBUTION?.url || 'https://calil.jp/')}" target="_blank" rel="noopener">${esc(CFG.ATTRIBUTION?.name || 'カーリル図書館API')}</a>`;
+  $('#attribution').innerHTML = `くもんのすいせん図書 2026年度版(公文教育研究会)の掲載図書より作成 ／ 蔵書情報: <a href="${esc(CFG.ATTRIBUTION?.url || 'https://calil.jp/')}" target="_blank" rel="noopener">${esc(CFG.ATTRIBUTION?.name || 'カーリル図書館API')}</a><br><small>画面の版: ${esc(APP_VERSION)}</small>`;
   window.addEventListener('hashchange', () => renderRoute());
   renderRoute();
   document.addEventListener('visibilitychange', () => { if (!document.hidden) pullServerNotifications(); });

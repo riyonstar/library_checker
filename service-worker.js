@@ -5,7 +5,7 @@
  *
  * ファイルを更新したら CACHE_VERSION を上げてください。
  */
-const CACHE_VERSION = 'kitalib-v4';
+const CACHE_VERSION = 'kitalib-v5';
 const APP_SHELL = [
   './', 'index.html', 'style.css', 'app.js', 'config.js', 'data.js',
   'books.json', 'libraries.json', 'manifest.json',
@@ -44,15 +44,12 @@ self.addEventListener('fetch', (event) => {
     );
     return;
   }
-  // 静的ファイル: キャッシュ優先 + 裏で更新(stale-while-revalidate)
+  // 静的ファイル: ネット優先(常に最新の画面になる)。オフラインのときだけキャッシュを使う
   event.respondWith(
-    caches.match(req).then((cached) => {
-      const net = fetch(req).then((res) => {
-        if (res && res.ok) { const copy = res.clone(); caches.open(CACHE_VERSION).then((c) => c.put(req, copy)); }
-        return res;
-      }).catch(() => cached);
-      return cached || net;
-    })
+    fetch(req).then((res) => {
+      if (res && res.ok) { const copy = res.clone(); caches.open(CACHE_VERSION).then((c) => c.put(req, copy)); }
+      return res;
+    }).catch(() => caches.match(req))
   );
 });
 
