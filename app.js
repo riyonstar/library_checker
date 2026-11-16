@@ -298,7 +298,8 @@ function coverHtml(b) {
 function coverFallback(img) {
   const srcs = coverSrcs(img.dataset.isbn);
   const next = Number(img.dataset.step || 0) + 1;
-  if (next < srcs.length) { img.dataset.step = String(next); img.src = srcs[next]; } else img.closest('.cover')?.remove();
+  if (next < srcs.length) { img.dataset.step = String(next); img.src = srcs[next]; }
+  else { const box = img.closest('.cover'); if (box) { box.classList.add('none'); box.innerHTML = '<span>📕<br>表紙<br>なし</span>'; } }   // どの取得先にも画像がない
 }
 document.addEventListener('error', (ev) => { const i = ev.target; if (i instanceof HTMLImageElement && i.classList.contains('cover-img')) coverFallback(i); }, true);
 document.addEventListener('load', (ev) => { const i = ev.target; if (i instanceof HTMLImageElement && i.classList.contains('cover-img') && i.naturalWidth <= 20) coverFallback(i); }, true);
@@ -363,6 +364,7 @@ function updateCards(bookId) {
   $$(`[data-book="${CSS.escape(bookId)}"] .lib-rows`).forEach((el) => { el.innerHTML = libRowsHtml(bookId); });
   const route = parseRoute();
   if (route.name === 'book' && route.id === bookId) renderRoute();
+  setCoverFor(bookId);
 }
 function refreshAllCards() { $$('[data-book]').forEach((el) => updateCards(el.dataset.book)); }
 function renderProgress() {
