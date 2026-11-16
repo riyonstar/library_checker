@@ -36,7 +36,9 @@ const state = {
   history: store.get('history', []),    // AvailabilityHistory[]
   notifs: store.get('notifs', []),      // Notification[]
   settings: store.get('settings', {}),  // { libs:[], mock:null|bool, level, pushOn }
-  isbns: store.get('isbns', {}),        // { bookId: [isbn13...] } (カーリルへのリンク用)
+  isbns: store.get('isbns', {}),        // { bookId: [isbn13...] } (カーリルへのリンク・表紙用)
+  read: store.get('read', {}),          // { bookId: true } 「読んだ」チェック
+  custom: store.get('custom', {}),      // { bookId: {book, level, addedAt} } 検索から推薦図書リストに追加した本
   loading: new Set(),                   // 確認中の本ID
   progress: null,                       // 一括確認の進捗表示
 };
@@ -46,7 +48,14 @@ const persist = {
   notifs: () => store.set('notifs', state.notifs.slice(-100)),
   settings: () => store.set('settings', state.settings),
   isbns: () => store.set('isbns', state.isbns),
+  read: () => store.set('read', state.read),
+  custom: () => store.set('custom', state.custom),
 };
+const OTHER = 'other';                                   // 「推薦図書以外」のラベル
+const levelLabel = (lv) => (lv === OTHER ? '推薦図書以外' : lv);
+const customBooks = (level) => Object.values(state.custom).filter((c) => c.level === level).sort((x, y) => (x.addedAt || '').localeCompare(y.addedAt || '')).map((c) => EXT.get(c.book.id) || c.book);
+const FILTER_DEFAULT = { lib: 'all', status: 'all', read: 'all' };
+const filters = () => ({ ...FILTER_DEFAULT, ...(state.settings.filters || {}) });
 
 /* ================= モード(モック/実データ) ================= */
 function useMock() {
@@ -92,7 +101,7 @@ function toast(msg) {
   toastTimer = setTimeout(() => { el.hidden = true; }, 3200);
 }
 const nowIso = () => new Date().toISOString();
-const levelColor = (lv) => LEVEL_COLORS[Math.max(0, LEVELS.indexOf(lv)) % LEVEL_COLORS.length];
+const levelColor = (lv) => (lv === OTHER ? '#4a5a6a' : LEVEL_COLORS[Math.max(0, LEVELS.indexOf(lv)) % LEVEL_COLORS.length]);
 
 /* ================= データ参照 ================= */
 function getBook(id) {
@@ -228,7 +237,11 @@ async function checkBooks(ids, { quiet = false } = {}) {
   }
   afterCheck(quiet);
 }
-function afterCheck() { syncPush(); }
+function afterCheck() {
+  syncPush();
+  // 絞り込み中は、確認で変わった状態に合わせて一覧を更新する
+  if (parseRoute().name === 'kumon' && filtersActive() && !state.progress) renderRoute({ keepScroll: true });
+}
 
 /* ================= 表示パーツ ================= */
 function recOf(bookId, libId) { return availDB[bookId]?.[libId] || null; }
@@ -275,23 +288,74 @@ function lastTimeHtml(bookId) {
   return `<div class="lib-row-detail">最終確認: ${t ? esc(fmtTime(t)) : '未確認'}</div>`;
 }
 
+/* ---- 表紙(ISBNから。国立国会図書館→openBDの順に探し、なければ表示しない) ---- */
+const coverSrcs = (isbn) => [`https://ndlsearch.ndl.go.jp/thumbnail/${isbn}.jpg`, `https://cover.openbd.jp/${isbn}.jpg`];
+function coverHtml(b) {
+  const isbn = (state.isbns[b.id] || b.isbns || [])[0];
+  if (!isbn) return '';
+  return `<div class="cover"><img class="cover-img" src="${esc(coverSrcs(isbn)[0])}" data-isbn="${esc(isbn)}" data-step="0" alt="${esc(b.title)}の表紙" loading="lazy" decoding="async" referrerpolicy="no-referrer"></div>`;
+}
+function coverFallback(img) {
+  const srcs = coverSrcs(img.dataset.isbn);
+  const next = Number(img.dataset.step || 0) + 1;
+  if (next < srcs.length) { img.dataset.step = String(next); img.src = srcs[next]; } else img.closest('.cover')?.remove();
+}
+document.addEventListener('error', (ev) => { const i = ev.target; if (i instanceof HTMLImageElement && i.classList.contains('cover-img')) coverFallback(i); }, true);
+document.addEventListener('load', (ev) => { const i = ev.target; if (i instanceof HTMLImageElement && i.classList.contains('cover-img') && i.naturalWidth <= 20) coverFallback(i); }, true);
+function setCoverFor(id) {
+  $$(`[data-book="${CSS.escape(id)}"] .book-main`).forEach((el) => {
+    if (el.querySelector('.cover')) return;
+    const b = getBook(id); if (!b) return;
+    el.insertAdjacentHTML('afterbegin', coverHtml(b));
+  });
+}
+const coverTried = new Set();
+let coverRun = 0;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/* 表示中の本のうち、ISBNが分かっていないものを、Workerに問い合わせて表紙を出す(少しずつ・混雑時は待つ) */
+async function ensureCovers() {
+  const run = ++coverRun;
+  if (!HAS_BACKEND || useMock() || !['kumon', 'search', 'favorites'].includes(parseRoute().name)) return;
+  let todo = currentVisibleIds().filter((id) => BOOK_BY_ID.has(id) && !(state.isbns[id] || []).length && !coverTried.has(id));
+  let busyCount = 0;
+  for (let round = 0; todo.length && round < 40; round++) {
+    if (run !== coverRun) return;
+    let res;
+    try { res = await api('/api/isbns', { method: 'POST', body: { ids: todo.slice(0, 80), resolve: round > 0 }, timeout: 40000 }); } catch { break; }
+    if (run !== coverRun) return;
+    for (const [id, list] of Object.entries(res.isbns || {})) if (list.length && !(state.isbns[id] || []).length) { state.isbns[id] = list; setCoverFor(id); }
+    persist.isbns();
+    todo = todo.filter((id) => !(state.isbns[id] || []).length);
+    if (round === 0) continue;
+    if (res.busy) { if (++busyCount >= 3) break; await sleep(8000); } else if (res.pending <= 0) break; else await sleep(900);
+  }
+  todo.forEach((id) => coverTried.add(id));
+}
+
 function bookCardHtml(b) {
   const meta = [];
-  if (b.isKumonRecommended) meta.push(`<span class="lv">${esc(b.level)}</span>`);
+  const lv = b.isKumonRecommended ? b.level : (b.customLevel || null);
+  if (lv) meta.push(`<span class="lv">${esc(levelLabel(lv))}</span>`);
   const au = b.author ? `著者：${esc(b.author)}` : '';
   const others = (b.contributors || []).length ? ` ${esc(b.contributors.join(' '))}` : '';
   const pub = b.publisher ? ` ／ ${esc(b.publisher)}` : '';
   const fav = isFav(b.id);
-  return `<article class="book" data-book="${esc(b.id)}" style="--spine:${b.isKumonRecommended ? levelColor(b.level) : '#4a5a6a'}">
+  const read = !!state.read[b.id];
+  const spine = b.isKumonRecommended ? levelColor(b.level) : (b.customLevel ? levelColor(b.customLevel) : '#4a5a6a');
+  return `<article class="book" data-book="${esc(b.id)}" style="--spine:${spine}">
     <div class="spine" aria-hidden="true"></div>
     <div class="book-body">
       <a class="book-link" href="#/book/${encodeURIComponent(b.id)}">
         <h3 class="book-title">${esc(b.title)}</h3>
         <div class="book-meta">${meta.join('')}${au}${others}${pub}${b.isNewIn2026 ? '<span class="new">新</span>' : ''}</div>
       </a>
-      <div class="lib-rows">${libRowsHtml(b.id)}</div>
+      <div class="book-main">${coverHtml(b)}<div class="lib-rows">${libRowsHtml(b.id)}</div></div>
+      ${state.custom[b.id] ? `<button class="mini-btn" data-unadd="${esc(b.id)}">✕ このリストから外す</button>` : ''}
     </div>
-    <button class="fav-btn" data-fav="${esc(b.id)}" aria-pressed="${fav}" aria-label="${fav ? 'お気に入りを解除' : 'お気に入りに追加'}">${fav ? '❤️' : '♡'}<span>${fav ? '登録済' : 'お気に入り'}</span></button>
+    <div class="side-btns">
+      <button class="fav-btn" data-fav="${esc(b.id)}" aria-pressed="${fav}" aria-label="${fav ? 'お気に入りを解除' : 'お気に入りに追加'}">${fav ? '❤️' : '♡'}<span>${fav ? '登録済' : 'お気に入り'}</span></button>
+      <button class="read-btn" data-read="${esc(b.id)}" aria-pressed="${read}" aria-label="${read ? '読んだを取り消す' : '読んだにする'}"><span aria-hidden="true">${read ? '☑' : '☐'}</span>読んだ</button>
+    </div>
   </article>`;
 }
 
@@ -335,16 +399,44 @@ function homeView() {
   <p class="muted on-wood" style="margin:14px 4px">対象: ${selectedLibs().map((l) => esc(l.name)).join('、')}。「貸出中」→「在架」になったら、お気に入りの本をお知らせします。</p>`;
 }
 
+function passFilters(b) {
+  const f = filters();
+  if (f.read === 'read' && !state.read[b.id]) return false;
+  if (f.read === 'unread' && state.read[b.id]) return false;
+  if (f.status !== 'all') {
+    const libs = f.lib === 'all' ? selectedLibs() : enabledLibs().filter((l) => l.id === f.lib);
+    // 未確認の本は「不明」として扱う
+    if (!libs.some((l) => (recOf(b.id, l.id)?.status || 'unknown') === f.status)) return false;
+  }
+  return true;
+}
+const filtersActive = () => { const f = filters(); return f.lib !== 'all' || f.status !== 'all' || f.read !== 'all'; };
+function filterBarHtml() {
+  const f = filters();
+  const sel = (key, opts) => `<select data-filter="${key}">${opts.map(([v, l]) => `<option value="${esc(v)}" ${f[key] === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
+  return `<div class="filters" role="group" aria-label="絞り込み">
+    <label><span>図書館</span>${sel('lib', [['all', 'すべて'], ...enabledLibs().map((l) => [l.id, l.shortName || l.name])])}</label>
+    <label><span>在架状況</span>${sel('status', [['all', 'すべて'], ['available', '在架'], ['lent', '貸出中'], ['unknown', '不明']])}</label>
+    <label><span>読んだ</span>${sel('read', [['all', 'すべて'], ['read', '読んだ'], ['unread', '読んでない']])}</label>
+  </div>`;
+}
+
 function kumonView(route) {
-  const level = LEVELS.includes(route.q.get('level')) ? route.q.get('level') : (LEVELS.includes(state.settings.level) ? state.settings.level : LEVELS[0]);
+  const levels = [...LEVELS, OTHER];
+  const asked = route.q.get('level');
+  const level = levels.includes(asked) ? asked : (levels.includes(state.settings.level) ? state.settings.level : LEVELS[0]);
   state.settings.level = level; persist.settings();
-  const list = BOOKS.filter((b) => b.level === level);
+  const all = [...BOOKS.filter((b) => b.level === level), ...customBooks(level)];
+  const list = all.filter(passFilters);
   return `
   <h1 class="page-title">📚 くもんの推薦図書</h1>
-  <div class="chips" role="group" aria-label="レベル">${LEVELS.map((lv) => `<button class="chip" data-level="${esc(lv)}" aria-pressed="${lv === level}">${esc(lv)}</button>`).join('')}</div>
+  <div class="chips" role="group" aria-label="レベル">${levels.map((lv) => `<button class="chip" data-level="${esc(lv)}" aria-pressed="${lv === level}">${esc(levelLabel(lv))}</button>`).join('')}</div>
   <div class="toolbar">${checkButton()}</div>
-  <h2 class="shelf-title">レベル ${esc(level)}（${list.length}冊）</h2>
-  <div class="shelf-list">${list.map(bookCardHtml).join('')}</div>`;
+  ${filterBarHtml()}
+  <h2 class="shelf-title">${level === OTHER ? '推薦図書以外' : 'レベル ' + esc(level)}（${filtersActive() ? `${list.length}/${all.length}` : all.length}冊）</h2>
+  ${filtersActive() ? '<p class="muted on-wood" style="margin:0 4px 8px">絞り込み中です。まだ確認していない本は「不明」として扱います。</p>' : ''}
+  <div class="shelf-list">${list.map(bookCardHtml).join('')}</div>
+  ${!all.length ? '<p class="empty">まだ本がありません。<br>「検索」で本を探して、このリストに追加できます。</p>' : (!list.length ? '<p class="empty">条件に合う本がありません。</p>' : '')}`;
 }
 
 function searchLocal(q) {
@@ -369,12 +461,44 @@ function searchView(route) {
   ${q ? extSearchBlock(q) : ''}`;
 }
 let extState = { q: null, items: null, error: null, busy: false };
+/* 検索で見つけた本を、推薦図書のリスト(5A・4A…または「推薦図書以外」)に追加する */
+function addRowHtml(b) {
+  const c = state.custom[b.id];
+  if (c) return `<div class="add-row">✅ 「${esc(levelLabel(c.level))}」に追加済み <button class="btn secondary small" data-unadd="${esc(b.id)}">リストから外す</button></div>`;
+  return `<div class="add-row"><label><span>追加先</span><select data-add-level="${esc(b.id)}">${[OTHER, ...LEVELS].map((lv) => `<option value="${esc(lv)}">${esc(levelLabel(lv))}</option>`).join('')}</select></label><button class="btn small" data-add="${esc(b.id)}">推薦図書に追加</button></div>`;
+}
+function addToList(id, level) {
+  const b = getBook(id); if (!b || BOOK_BY_ID.has(id)) return;
+  const book = { id: b.id, title: b.title, author: b.author, publisher: b.publisher, isbns: b.isbns || [], isKumonRecommended: false, authors: [], contributors: [] };
+  state.custom[id] = { book, level, addedAt: nowIso() };
+  EXT.set(id, { ...book, customLevel: level });
+  persist.custom();
+  toast(`「${levelLabel(level)}」に追加しました`);
+  renderRoute({ keepScroll: true });
+}
+function removeFromList(id) {
+  if (!state.custom[id]) return;
+  delete state.custom[id]; persist.custom();
+  const e = EXT.get(id); if (e) delete e.customLevel;
+  toast('リストから外しました');
+  renderRoute({ keepScroll: true });
+}
+function toggleRead(id) {
+  if (state.read[id]) delete state.read[id]; else state.read[id] = true;
+  persist.read();
+  const on = !!state.read[id];
+  $$(`[data-read="${CSS.escape(id)}"]`).forEach((btn) => {
+    btn.setAttribute('aria-pressed', on); btn.setAttribute('aria-label', on ? '読んだを取り消す' : '読んだにする');
+    const ic = btn.querySelector('span'); if (ic) ic.textContent = on ? '☑' : '☐';
+  });
+  if (parseRoute().name === 'kumon' && filters().read !== 'all') renderRoute({ keepScroll: true });
+}
 function extSearchBlock(q) {
   if (useMock()) return `<div class="notice">🧪 モックモードでは、くもんの推薦図書の中だけを検索します。(推薦図書以外も検索するには、バックエンドの接続が必要です)</div>`;
   if (extState.q === q && extState.items) {
     return `<h2 class="shelf-title">図書館全体からの検索結果(国立国会図書館サーチ)</h2>
       ${extState.items.length ? `<div class="toolbar">${checkButton()}</div>` : ''}
-      <div class="shelf-list" id="ext-list">${extState.items.map(bookCardHtml).join('') || '<p class="empty">見つかりませんでした。</p>'}</div>`;
+      <div class="shelf-list" id="ext-list">${extState.items.map((b) => `<div class="ext-item">${bookCardHtml(b)}${addRowHtml(b)}</div>`).join('') || '<p class="empty">見つかりませんでした。</p>'}</div>`;
   }
   return `<div style="margin-top:14px"><button class="btn secondary block" id="ext-search" ${extState.busy ? 'disabled' : ''}>${extState.busy ? '検索中…' : '🌐 推薦図書以外も探す(図書館全体)'}</button>${extState.error ? `<p class="fail" style="margin-top:8px">${esc(extState.error)}</p>` : ''}</div>`;
 }
@@ -431,6 +555,22 @@ function notificationsView() {
   return html;
 }
 
+
+/* ISBNを自動で特定できなかった本のために、ISBNを手入力して登録する欄 */
+function isbnFormHtml(b, libs) {
+  if (!HAS_BACKEND || useMock() || !b.isKumonRecommended) return '';
+  const missing = libs.some((l) => recOf(b.id, l.id)?.error === 'no_isbn');
+  const cur = (state.isbns[b.id] || []).join(' ');
+  return `<details class="isbn-box" ${missing ? 'open' : ''}>
+    <summary>${missing ? '⚠ ISBNを手入力して登録する' : 'ISBNを手入力する(任意)'}</summary>
+    <p class="muted">ISBNを特定できないと、在架を確認できません。図書館の蔵書検索や本の裏表紙などでISBN(10桁または13桁)を調べて入力してください。複数あるときはスペースで区切ります(最大4つ)。空欄で登録すると取り消せます。</p>
+    <form id="isbn-form" data-book="${esc(b.id)}" class="searchbox">
+      <input type="text" name="isbn" inputmode="numeric" placeholder="例: 4-251-00111-7" value="${esc(missing ? '' : cur)}" aria-label="ISBN" autocomplete="off">
+      <button class="btn" type="submit">登録</button>
+    </form>
+  </details>`;
+}
+
 function bookView(id) {
   const b = getBook(id);
   if (!b) return '<p class="empty">本が見つかりません。<br><a href="#/kumon" class="btn secondary" style="margin-top:12px">推薦図書へ</a></p>';
@@ -460,6 +600,7 @@ function bookView(id) {
       ${libs[0]?.officialUrl ? `<a class="btn secondary small" href="${esc(libs[0].officialUrl)}" target="_blank" rel="noopener">北区立図書館の公式サイト</a>` : ''}
     </div>
     ${useMock() ? '<div class="notice">🧪 モックモード: 上の状態は動作確認用の仮データです。実際の図書館の状況ではありません。</div>' : ''}
+    ${isbnFormHtml(b, libs)}
   </section>
   ${hist.length ? `<section class="panel"><h2>状態の履歴</h2><ul class="hist">${hist.map((h) => { const lib = LIBS.find((l) => l.id === h.libraryId); const p = h.previousStatus ? STATUS[h.previousStatus] : null; const c = STATUS[h.currentStatus]; return `<li>${esc(lib?.shortName || h.libraryId)}: ${p ? p.icon + p.label : '初回'} → ${c.icon}${c.label}<span class="muted">(${esc(fmtTime(h.checkedAt))})</span></li>`; }).join('')}</ul></section>` : ''}`;
 }
@@ -501,6 +642,7 @@ function onRouteShown(route) {
     const ids = $$('[data-book]').map((el) => el.dataset.book).filter((id) => !recOf(id, selectedLibs()[0]?.id));
     if (ids.length) { ids.forEach((id) => selectedLibs().forEach((l) => applyRecord(id, l.id, mockRecord(id, l.id)))); saveAvail(); persist.history(); refreshAllCards(); }
   }
+  if (['kumon', 'search', 'favorites'].includes(route.name)) ensureCovers();
   view().focus({ preventScroll: true });
 }
 
@@ -512,7 +654,16 @@ document.addEventListener('click', async (ev) => {
   const t = ev.target.closest('button, a');
   if (!t) return;
   if (t.dataset.fav) { ev.preventDefault(); toggleFav(t.dataset.fav); return; }
-  if (t.dataset.check) { ev.preventDefault(); await checkBooks(currentVisibleIds()); return; }
+  if (t.dataset.read) { ev.preventDefault(); toggleRead(t.dataset.read); return; }
+  if (t.dataset.add) { ev.preventDefault(); const s = document.querySelector(`select[data-add-level="${CSS.escape(t.dataset.add)}"]`); addToList(t.dataset.add, s ? s.value : OTHER); return; }
+  if (t.dataset.unadd) { ev.preventDefault(); removeFromList(t.dataset.unadd); return; }
+  if (t.dataset.check) {
+    ev.preventDefault();
+    // 推薦図書ページは、絞り込みで隠れている本も含めて、そのレベル全体を確認する(絞り込みの結果を正しくするため)
+    const r = parseRoute();
+    const ids = r.name === 'kumon' ? [...BOOKS.filter((b) => b.level === state.settings.level), ...customBooks(state.settings.level)].map((b) => b.id) : currentVisibleIds();
+    await checkBooks(ids); return;
+  }
   if (t.dataset.level) { location.hash = `#/kumon?level=${encodeURIComponent(t.dataset.level)}`; return; }
   if (t.id === 'ext-search') { await runExtSearch(); return; }
   if (t.id === 'clear-data') {
@@ -524,8 +675,22 @@ document.addEventListener('click', async (ev) => {
   if (t.id === 'push-enable') { await enablePush(); return; }
   if (t.id === 'push-disable') { await disablePush(); return; }
 });
-document.addEventListener('submit', (ev) => {
+document.addEventListener('submit', async (ev) => {
   const f = ev.target;
+  if (f.id === 'isbn-form') {
+    ev.preventDefault();
+    const id = f.dataset.book;
+    const val = new FormData(f).get('isbn').toString().trim();
+    try {
+      const res = await api('/api/isbn', { method: 'POST', body: { id, isbns: val } });
+      if (res.isbns?.length) state.isbns[id] = res.isbns; else delete state.isbns[id];
+      persist.isbns();
+      delete availDB[id]; saveAvail();
+      toast(res.isbns?.length ? 'ISBNを登録しました。確認します…' : '手入力のISBNを取り消しました');
+      if (res.isbns?.length) await checkBooks([id], { quiet: true }); else renderRoute({ keepScroll: true });
+    } catch (e) { toast(e.message || '登録に失敗しました'); }
+    return;
+  }
   if (f.id === 'home-search' || f.id === 'search-form') {
     ev.preventDefault();
     const q = new FormData(f).get('q').toString().trim();
@@ -536,6 +701,11 @@ document.addEventListener('submit', (ev) => {
 });
 document.addEventListener('change', (ev) => {
   const t = ev.target;
+  if (t.dataset?.filter) {
+    state.settings.filters = { ...filters(), [t.dataset.filter]: t.value }; persist.settings();
+    renderRoute({ keepScroll: true });
+    return;
+  }
   if (t.dataset?.lib) {
     const ids = $$('input[data-lib]:checked').map((i) => i.dataset.lib);
     if (!ids.length) { t.checked = true; toast('少なくとも1館を選んでください'); return; }
@@ -690,6 +860,7 @@ async function loadData() {
 
 async function boot() {
   try { await loadData(); } catch (e) { $('#view').innerHTML = '<p class="empty">データを読み込めませんでした。</p>'; return; }
+  Object.values(state.custom).forEach((c) => { if (!BOOK_BY_ID.has(c.book.id)) EXT.set(c.book.id, { ...c.book, customLevel: c.level }); });
   loadAvail(); updateBanner(); updateBell();
   $('#attribution').innerHTML = `くもんのすいせん図書 2026年度版(公文教育研究会)の掲載図書より作成 ／ 蔵書情報: <a href="${esc(CFG.ATTRIBUTION?.url || 'https://calil.jp/')}" target="_blank" rel="noopener">${esc(CFG.ATTRIBUTION?.name || 'カーリル図書館API')}</a>`;
   window.addEventListener('hashchange', () => renderRoute());

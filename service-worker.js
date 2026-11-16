@@ -5,7 +5,7 @@
  *
  * ファイルを更新したら CACHE_VERSION を上げてください。
  */
-const CACHE_VERSION = 'kitalib-v1';
+const CACHE_VERSION = 'kitalib-v3';
 const APP_SHELL = [
   './', 'index.html', 'style.css', 'app.js', 'config.js', 'data.js',
   'books.json', 'libraries.json', 'manifest.json',

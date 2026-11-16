@@ -518,6 +518,65 @@ async function handleDebugIsbn(ctx, req) {
   return json(out);
 }
 
+
+/* ------------------------------------------------------------------ */
+/* /api/isbn (自動で特定できない本のISBNを、画面から手入力して保存する)       */
+/* ------------------------------------------------------------------ */
+async function handleSetIsbn(ctx, req) {
+  // 書き込みなので、許可したオリジン(自分のアプリ)からだけ受け付ける
+  const allow = (ctx.env.ALLOWED_ORIGIN || '').split(',').map((x) => x.trim()).filter(Boolean);
+  if (!allow.includes(req.headers.get('Origin') || '')) return json({ error: 'forbidden' }, 403);
+  let body;
+  try { body = await req.json(); } catch { return json({ error: 'bad_request' }, 400); }
+  const id = String(body.id || '');
+  const books = await loadBooks(ctx);
+  if (!books.has(id)) return json({ error: 'unknown_book' }, 400);
+  const raw = Array.isArray(body.isbns) ? body.isbns : String(body.isbns || '').split(/[,\s、]+/);
+  const isbns = [...new Set(raw.map(toIsbn13).filter(Boolean))].slice(0, MAX_ISBN_PER_BOOK);
+  if (String(body.isbns || '').trim() && !isbns.length) return json({ error: 'bad_isbn', message: 'ISBNの形式が正しくありません(10桁または13桁の数字)' }, 400);
+  if (!(await rateLimit(ctx.env, req, 5))) return json({ error: 'rate_limited' }, 429);
+  if (isbns.length) await ctx.env.KV.put(`isbn2:${id}`, JSON.stringify({ isbns, at: Date.now(), manual: true }), { expirationTtl: 400 * 24 * 3600 });
+  else await ctx.env.KV.delete(`isbn2:${id}`);   // 空欄で登録 = 手入力を取り消す
+  await ctx.env.KV.delete(`av:${id}`);            // 古い確認結果を捨てる
+  return json({ ok: true, id, isbns });
+}
+
+
+/* ------------------------------------------------------------------ */
+/* /api/isbns (表紙の表示用: 保存済みのISBNを返し、未特定の本は少しずつ特定する)  */
+/* ------------------------------------------------------------------ */
+async function handleIsbns(ctx, req) {
+  let body;
+  try { body = await req.json(); } catch { return json({ error: 'bad_request' }, 400); }
+  const ids = (Array.isArray(body.ids) ? body.ids : []).map(String).slice(0, 80);
+  if (!ids.length) return json({ error: 'no_items' }, 400);
+  const resolve = !!body.resolve;
+  if (!(await rateLimit(ctx.env, req, resolve ? 6 : 1))) return json({ error: 'rate_limited' }, 429);
+  const books = await loadBooks(ctx);
+  const isbns = {};
+  const missing = [];   // まだ一度も特定を試していない本
+  for (const id of ids) {
+    const b = books.get(id);
+    if (!b) continue;
+    const manual = (Array.isArray(b.isbn) ? b.isbn : [b.isbn]).map(toIsbn13).filter(Boolean);
+    if (manual.length) { isbns[id] = manual.slice(0, MAX_ISBN_PER_BOOK); continue; }
+    const cached = await ctx.env.KV.get(`isbn2:${id}`, 'json');
+    if (cached?.isbns?.length) isbns[id] = cached.isbns;
+    else if (!cached) missing.push(id);
+  }
+  let busy = false, done = 0;
+  if (resolve) {
+    for (const id of missing.slice(0, 4)) {
+      if (ctx.budget.left < 14) break;
+      const r = await resolveIsbns(ctx, books.get(id));
+      if (r === null) { busy = true; break; }   // NDLが混雑中など。あとでやり直す
+      done++;
+      if (r.length) isbns[id] = r;
+    }
+  }
+  return json({ isbns, pending: Math.max(0, missing.length - done), busy });
+}
+
 /* ------------------------------------------------------------------ */
 /* /api/search (NDLサーチで自由検索 → ISBN付きの候補を返す)               */
 /* ------------------------------------------------------------------ */
@@ -751,6 +810,8 @@ export async function route(req, env, over = {}) {
     else if (url.pathname === '/api/availability' && req.method === 'POST') res = await handleAvailability(ctx, req);
     else if (url.pathname === '/api/vapid-public-key' && req.method === 'GET') res = json({ key: (await getVapid(ctx)).pub });
     else if (url.pathname === '/api/debug-isbn' && req.method === 'GET') res = await handleDebugIsbn(ctx, req);
+    else if (url.pathname === '/api/isbn' && req.method === 'POST') res = await handleSetIsbn(ctx, req);
+    else if (url.pathname === '/api/isbns' && req.method === 'POST') res = await handleIsbns(ctx, req);
     else if (url.pathname === '/api/search' && req.method === 'GET') res = await handleSearch(ctx, req);
     else if (url.pathname === '/api/sync' && req.method === 'POST') res = await handleSync(ctx, req);
     else if (url.pathname === '/api/unsubscribe' && req.method === 'POST') res = await handleUnsubscribe(ctx, req);

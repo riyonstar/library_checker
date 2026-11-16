@@ -195,3 +195,27 @@ h1, h2, h3 { font-family: var(--serif); margin: 0; }
 @media (min-width: 640px) { .shelf-title { margin-left: 0; margin-right: 0; border-radius: 6px; } .chips { margin: 0; } }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 @media (prefers-color-scheme: dark) { /* 本棚は元から暗めなのでそのまま */ }
+
+/* ISBN手入力欄 */
+.isbn-box { margin-top: 14px; border-top: 1px dashed #c9a24b; padding-top: 10px; }
+.isbn-box summary { cursor: pointer; font-weight: 700; }
+.isbn-box .searchbox { margin-top: 8px; }
+
+/* 表紙・読んだボタン・絞り込み・リスト追加 */
+.book-main { display: flex; gap: 10px; align-items: flex-start; margin-top: 8px; }
+.book-main .lib-rows { flex: 1; min-width: 0; margin-top: 0; }
+.cover { flex: 0 0 72px; }
+.cover img { display: block; width: 72px; height: auto; max-height: 108px; object-fit: contain; border-radius: 3px; background: #fff; box-shadow: 0 2px 5px rgba(0,0,0,.35); }
+.side-btns { flex: 0 0 68px; display: flex; flex-direction: column; align-items: stretch; justify-content: center; gap: 6px; padding: 4px 2px; }
+.side-btns .fav-btn { flex: 0 0 auto; align-self: stretch; min-height: 56px; width: 100%; }
+.read-btn { border: 2px solid #b79d6c; background: var(--paper-2); color: var(--ink); border-radius: 10px; min-height: 44px; padding: 2px 0; font-size: 12.5px; font-weight: 700; cursor: pointer; display: grid; place-items: center; line-height: 1.2; font-family: var(--sans); }
+.read-btn span { font-size: 20px; line-height: 1; }
+.read-btn[aria-pressed=true] { background: #dff0e2; border-color: #2f7d46; color: #1d5a30; }
+.mini-btn { margin-top: 8px; border: 1px solid #b79d6c; background: transparent; color: var(--ink-soft); border-radius: 8px; min-height: 34px; padding: 0 10px; font-size: 12.5px; cursor: pointer; }
+.filters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0 0 10px; background: var(--paper); border: 2px solid #d8c59b; border-radius: 12px; padding: 8px; }
+.filters label { display: grid; gap: 2px; font-size: 12px; font-weight: 700; color: var(--ink-soft); min-width: 0; }
+.filters select, .add-row select { width: 100%; min-height: 44px; border-radius: 10px; border: 2px solid #b79d6c; background: #fffdf7; color: var(--ink); font-size: 15px; padding: 0 6px; font-family: var(--sans); }
+.on-wood { color: #f3e6c8; }
+.ext-item { display: flex; flex-direction: column; }
+.add-row { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; background: var(--paper-2); border: 1px solid #cdb98c; border-top: 0; border-radius: 0 0 12px 12px; padding: 8px 10px; margin-top: -6px; font-size: 14px; }
+.add-row label { display: grid; gap: 2px; font-size: 12px; font-weight: 700; color: var(--ink-soft); flex: 1; min-width: 130px; }
