@@ -288,18 +288,18 @@ function lastTimeHtml(bookId) {
   return `<div class="lib-row-detail">最終確認: ${t ? esc(fmtTime(t)) : '未確認'}</div>`;
 }
 
-/* ---- 表紙(ISBNから。国立国会図書館→openBDの順に探し、なければ表示しない) ---- */
-const coverSrcs = (isbn) => [`https://ndlsearch.ndl.go.jp/thumbnail/${isbn}.jpg`, `https://cover.openbd.jp/${isbn}.jpg`];
+/* ---- 表紙(Google ブックスの画像。その本のISBNを順に試し、どれにもなければ「表紙なし」を表示) ---- */
+const coverUrl = (isbn) => `https://books.google.com/books/content?vid=ISBN${isbn}&printsec=frontcover&img=1&zoom=1`;
 function coverHtml(b) {
-  const isbn = (state.isbns[b.id] || b.isbns || [])[0];
-  if (!isbn) return '';
-  return `<div class="cover"><img class="cover-img" src="${esc(coverSrcs(isbn)[0])}" data-isbn="${esc(isbn)}" data-step="0" alt="${esc(b.title)}の表紙" loading="lazy" decoding="async" referrerpolicy="no-referrer"></div>`;
+  const list = (state.isbns[b.id] || b.isbns || []).slice(0, 4);
+  if (!list.length) return '';
+  return `<div class="cover"><img class="cover-img" src="${esc(coverUrl(list[0]))}" data-isbns="${esc(list.join(','))}" data-step="0" alt="${esc(b.title)}の表紙" loading="lazy" decoding="async" referrerpolicy="no-referrer"></div>`;
 }
 function coverFallback(img) {
-  const srcs = coverSrcs(img.dataset.isbn);
+  const list = (img.dataset.isbns || '').split(',').filter(Boolean);
   const next = Number(img.dataset.step || 0) + 1;
-  if (next < srcs.length) { img.dataset.step = String(next); img.src = srcs[next]; }
-  else { const box = img.closest('.cover'); if (box) { box.classList.add('none'); box.innerHTML = '<span>📕<br>表紙<br>なし</span>'; } }   // どの取得先にも画像がない
+  if (next < list.length) { img.dataset.step = String(next); img.src = coverUrl(list[next]); }
+  else { const box = img.closest('.cover'); if (box) { box.classList.add('none'); box.innerHTML = '<span>📕<br>表紙<br>なし</span>'; } }   // どのISBNにも画像がない
 }
 document.addEventListener('error', (ev) => { const i = ev.target; if (i instanceof HTMLImageElement && i.classList.contains('cover-img')) coverFallback(i); }, true);
 document.addEventListener('load', (ev) => { const i = ev.target; if (i instanceof HTMLImageElement && i.classList.contains('cover-img') && i.naturalWidth <= 20) coverFallback(i); }, true);
