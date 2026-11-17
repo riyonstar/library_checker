@@ -42,17 +42,34 @@
   const proxied = (url) => 'https://images.weserv.nl/?url=' + encodeURIComponent(url.replace(/^https?:\/\//, ''));
   const coverUrls = (isbn) => [3, 2, 1].map((z) => `https://books.google.com/books/content?vid=ISBN${isbn}&printsec=frontcover&img=1&zoom=${z}`);
 
-  async function tryLoad(url) {
+  // Google は表紙がない本にも、灰色の「画像なし」の絵を返す。実在しないISBNで取得した絵と同じものは、表紙として使わない。
+  const FNV = (buf) => { const b = new Uint8Array(buf); let h = 2166136261; for (let i = 0; i < b.length; i++) { h ^= b[i]; h = Math.imul(h, 16777619); } return b.length + ':' + (h >>> 0); };
+  const phCache = {};
+  function placeholderSigs(zoom) {
+    return (phCache[zoom] ||= (async () => {
+      const url = `https://books.google.com/books/content?vid=ISBN0000000000&printsec=frontcover&img=1&zoom=${zoom}`;
+      const sigs = [];
+      for (const u of [url, proxied(url)]) {
+        try { const r = await fetchTimeout(u, 9000); if (r.ok) sigs.push(FNV(await r.arrayBuffer())); } catch (e) { /* 次へ */ }
+      }
+      return sigs;
+    })());
+  }
+
+  async function tryLoad(url, zoom) {
+    const refs = await placeholderSigs(zoom);
     for (const u of [url, proxied(url)]) {
       try {
         const r = await fetchTimeout(u, 9000);
         if (!r.ok) continue;
-        const blob = await r.blob();
-        if (blob.size < 800) continue;
+        const buf = await r.arrayBuffer();
+        if (buf.byteLength < 800) continue;
+        if (refs.includes(FNV(buf))) continue;                         // 「画像なし」の絵
+        const blob = new Blob([buf], { type: r.headers.get('content-type') || 'image/jpeg' });
         const obj = URL.createObjectURL(blob);
         try {
           const img = await loadImage(obj);
-          if (Math.min(img.naturalWidth, img.naturalHeight) < 100) continue;   // 「画像なし」の小さな絵などは使わない
+          if (Math.min(img.naturalWidth, img.naturalHeight) < 100) continue;   // 小さすぎる絵は使わない
           return img;
         } finally { setTimeout(() => URL.revokeObjectURL(obj), 1500); }
       } catch (e) { /* 次の経路へ */ }
@@ -63,8 +80,9 @@
   /** その本のISBN(最大2つ)から表紙画像を探す。なければ null */
   async function fetchCover(isbns) {
     for (const isbn of (isbns || []).slice(0, 2)) {
-      for (const u of coverUrls(isbn)) {
-        const img = await tryLoad(u);
+      const urls = coverUrls(isbn);
+      for (let i = 0; i < urls.length; i++) {
+        const img = await tryLoad(urls[i], [3, 2, 1][i]);
         if (img) return img;
       }
     }
