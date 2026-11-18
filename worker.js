@@ -223,6 +223,7 @@ export function parseNdlOpenSearch(xml) {
   return items;
 }
 
+const jpIsbns = (l) => (l || []).filter((i) => /^9784/.test(i));   // 日本語版(国コード978-4)だけ使う
 export function pickIsbns(book, items) {
   const q = normText(book.searchTitle || book.title);
   if (q.length < 2) return [];
@@ -250,7 +251,7 @@ export function pickIsbns(book, items) {
   }
   scored.sort((a, b) => (b.score + b.jp) - (a.score + a.jp));   // 日本語と明記された資料を優先
   const out = [];
-  for (const s of scored) for (const i of s.isbns) if (!out.includes(i)) out.push(i);
+  for (const s of scored) for (const i of jpIsbns(s.isbns)) if (!out.includes(i)) out.push(i);
   return out.slice(0, MAX_ISBN_PER_BOOK);
 }
 
@@ -271,7 +272,10 @@ export async function resolveIsbns(ctx, book) {
   if (manual.length) return manual.slice(0, MAX_ISBN_PER_BOOK);
   const key = `isbn3:${book.id}`;
   const cached = await ctx.env.KV.get(key, 'json');
-  if (cached && (cached.isbns.length || Date.now() - cached.at < ISBN_NEG_CACHE_SEC * 1000)) return cached.isbns;
+  if (cached) {   // 保存済みの中に外国語版のISBNが混ざっていたら除く(日本語版が残らなければ探し直す)
+    const cj = jpIsbns(cached.isbns);
+    if (cj.length || (!cached.isbns.length && Date.now() - cached.at < ISBN_NEG_CACHE_SEC * 1000)) return cj;
+  }
   // カーリルへの問い合わせ用に予算を残す
   if (ctx.budget.left < 14) return null;
   let isbns = [];
@@ -476,7 +480,7 @@ async function handleAvailability(ctx, req) {
   for (const it of reqItems) {
     const id = String(it.id || '');
     const c = await ctx.env.KV.get(`isbn3:${id}`, 'json');
-    isbnMap[id] = c?.isbns || (Array.isArray(it.isbns) ? it.isbns.map(toIsbn13).filter(Boolean) : []);
+    isbnMap[id] = (c?.isbns ? jpIsbns(c.isbns) : null) || (Array.isArray(it.isbns) ? it.isbns.map(toIsbn13).filter(Boolean) : []);
   }
   return json({ source: 'calil', results, isbns: isbnMap, serverTime: nowIso() });
 }
@@ -565,8 +569,9 @@ async function handleIsbns(ctx, req) {
     const manual = (Array.isArray(b.isbn) ? b.isbn : [b.isbn]).map(toIsbn13).filter(Boolean);
     if (manual.length) { isbns[id] = manual.slice(0, MAX_ISBN_PER_BOOK); continue; }
     const cached = await ctx.env.KV.get(`isbn3:${id}`, 'json');
-    if (cached?.isbns?.length) isbns[id] = cached.isbns;
-    else if (!cached) missing.push(id);
+    const cj = jpIsbns(cached?.isbns);
+    if (cj.length) isbns[id] = cj;
+    else if (!cached || cached.isbns.length) missing.push(id);   // 未調査、または外国語版しかなかった本は探し直す
   }
   let busy = false, done = 0;
   if (resolve) {

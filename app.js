@@ -291,32 +291,166 @@ function lastTimeHtml(bookId) {
   return `<div class="lib-row-detail">最終確認: ${t ? esc(fmtTime(t)) : '未確認'}</div>`;
 }
 
-/* ---- 表紙(Google ブックスの画像。その本のISBNを順に試し、どれにもなければ「表紙なし」を表示) ---- */
-const coverUrl = (isbn) => `https://books.google.com/books/content?vid=ISBN${isbn}&printsec=frontcover&img=1&zoom=1`;
+/* ---- 表紙 ----
+ * 別アプリ(絵本ラベルメーカー)と同じ方法で探す: openBD → 国立国会図書館 → Google ブックス。
+ * 日本語版(ISBNが 978-4 で始まるもの)だけを使う。Google の「画像なし」の灰色の絵は表紙として使わない。
+ * 見つけた表紙は端末(キャッシュ)に保存し、次からは通信しない。 */
+const COVER_CACHE = 'kitalib-cover-img';
+const coverKey = (id) => 'https://cover.local/' + encodeURIComponent(id);
+const jpIsbns = (l) => (l || []).filter((i) => /^9784/.test(i));
+const coverIsbns = (b) => jpIsbns(state.isbns[b.id] || b.isbns || []).slice(0, 4);
+const coverUrlMap = new Map();      // 本ID → 画面に出す一時URL
+const coverInflight = new Set();
+const NO_COVER_TTL = 24 * 3600 * 1000;
+const noCoverFresh = (id) => state.noCover[id] && Date.now() - Number(state.noCover[id]) < NO_COVER_TTL;
+const NONE_BOX = '<span>📕<br>表紙<br>なし</span>';
 function coverHtml(b) {
-  const list = (state.isbns[b.id] || b.isbns || []).slice(0, 4);
-  if (!list.length) return '';
-  if (state.noCover[b.id]) return '<div class="cover none"><span>📕<br>表紙<br>なし</span></div>';
-  return `<div class="cover"><img class="cover-img" src="${esc(coverUrl(list[0]))}" data-isbns="${esc(list.join(','))}" data-step="0" alt="${esc(b.title)}の表紙" loading="lazy" decoding="async" referrerpolicy="no-referrer"></div>`;
+  const u = coverUrlMap.get(b.id);
+  if (u) return `<div class="cover" data-cover="${esc(b.id)}" data-done="1"><img class="cover-img" src="${esc(u)}" alt="${esc(b.title)}の表紙" decoding="async"></div>`;
+  if (noCoverFresh(b.id)) return `<div class="cover none" data-cover="${esc(b.id)}" data-done="1">${NONE_BOX}</div>`;
+  return `<div class="cover wait" data-cover="${esc(b.id)}"></div>`;
 }
-function coverFallback(img) {
-  const list = (img.dataset.isbns || '').split(',').filter(Boolean);
-  const next = Number(img.dataset.step || 0) + 1;
-  if (next < list.length) { img.dataset.step = String(next); img.src = coverUrl(list[next]); }
-  else {   // どのISBNにも画像がない(オフライン中は記録しない)
-    const box = img.closest('.cover'); if (box) { box.classList.add('none'); box.innerHTML = '<span>📕<br>表紙<br>なし</span>'; }
-    const id = img.closest('[data-book]')?.dataset.book;
-    if (id && navigator.onLine !== false && !state.noCover[id]) { state.noCover[id] = true; persist.noCover(); }
+function paintCover(id, url) {
+  $$(`.cover[data-cover="${CSS.escape(id)}"]`).forEach((el) => {
+    el.dataset.done = '1'; el.classList.remove('wait');
+    if (url) { el.classList.remove('none'); el.innerHTML = `<img class="cover-img" src="${esc(url)}" alt="" decoding="async">`; }
+    else { el.classList.add('none'); el.innerHTML = NONE_BOX; }
+  });
+}
+const proxiedImg = (url) => 'https://images.weserv.nl/?url=' + encodeURIComponent(url.replace(/^https?:\/\//, ''));
+async function fetchTo(url, ms = 9000) {
+  const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), ms);
+  try { return await fetch(url, { signal: ctrl.signal, mode: 'cors', credentials: 'omit', referrerPolicy: 'no-referrer' }); } finally { clearTimeout(t); }
+}
+const FNV = (buf) => { const b = new Uint8Array(buf); let h = 2166136261; for (let i = 0; i < b.length; i++) { h ^= b[i]; h = Math.imul(h, 16777619); } return b.length + ':' + (h >>> 0); };
+const phCache = {};
+function placeholderSigs(z) {   // Google が「画像なし」のときに返す絵(実在しないISBNで取得して見本にする)
+  return (phCache[z] ||= (async () => {
+    const url = `https://books.google.com/books/content?vid=ISBN0000000000&printsec=frontcover&img=1&zoom=${z}`;
+    const sigs = [];
+    for (const u of [url, proxiedImg(url)]) { try { const r = await fetchTo(u, 8000); if (r.ok) sigs.push(FNV(await r.arrayBuffer())); } catch { /* 次へ */ } }
+    return sigs;
+  })());
+}
+function decodeImg(blob) {
+  return new Promise((resolve, reject) => {
+    const u = URL.createObjectURL(blob); const im = new Image();
+    im.onload = () => { URL.revokeObjectURL(u); resolve(im); };
+    im.onerror = () => { URL.revokeObjectURL(u); reject(new Error('decode')); };
+    im.src = u;
+  });
+}
+const coverNet = { ok: false };   // 通信ができた(=「見つからない」が本当に見つからない)かどうか
+/** 画像を取って、正しい表紙なら { img } を返す。z は Google の拡大段階(見本比較に使う) */
+async function loadCover(url, z) {
+  const refs = z ? await placeholderSigs(z) : [];
+  for (const u of [url, proxiedImg(url)]) {
+    try {
+      const r = await fetchTo(u, 10000);
+      coverNet.ok = true;
+      if (!r.ok) { if (r.status === 403 && u === url) continue; return null; }
+      const buf = await r.arrayBuffer();
+      if (buf.byteLength < 800 || refs.includes(FNV(buf))) return null;
+      const img = await decodeImg(new Blob([buf], { type: r.headers.get('content-type') || 'image/jpeg' }));
+      if (Math.min(img.naturalWidth, img.naturalHeight) < 100) return null;
+      return { img };
+    } catch { /* 直接取れない(CORS等)→ プロキシ経由で再試行 */ }
   }
+  return null;
 }
-document.addEventListener('error', (ev) => { const i = ev.target; if (i instanceof HTMLImageElement && i.classList.contains('cover-img')) coverFallback(i); }, true);
-document.addEventListener('load', (ev) => { const i = ev.target; if (i instanceof HTMLImageElement && i.classList.contains('cover-img') && i.naturalWidth <= 20) coverFallback(i); }, true);
+async function coverFromIsbn(isbn) {
+  const cands = [];
+  try {
+    const r = await fetchTo('https://api.openbd.jp/v1/get?isbn=' + isbn, 8000);
+    const j = r.ok ? await r.json() : null; const c = j && j[0] && j[0].summary && j[0].summary.cover;
+    coverNet.ok = true; if (c) cands.push([c, 0]);
+  } catch { /* 次へ */ }
+  cands.push([`https://cover.openbd.jp/${isbn}.jpg`, 0], [`https://ndlsearch.ndl.go.jp/thumbnail/${isbn}.jpg`, 0]);
+  for (const z of [2, 1]) cands.push([`https://books.google.com/books/content?vid=ISBN${isbn}&printsec=frontcover&img=1&zoom=${z}`, z]);
+  for (const [u, z] of cands) { const r = await loadCover(u, z); if (r) return r; }
+  return null;
+}
+let googleApiDead = false;
+/** ISBNが分からない本: 書名・著者・出版社が合う日本語の本を Google ブックスで探す */
+async function coverFromTitle(b) {
+  if (googleApiDead) return null;
+  try {
+    const q = `intitle:"${b.title}"` + (b.author ? `+inauthor:"${String(b.author).split(/[ 　、,]/)[0]}"` : '');
+    const r = await fetchTo('https://www.googleapis.com/books/v1/volumes?q=' + encodeURIComponent(q).replace(/%2B/g, '+') + '&langRestrict=ja&maxResults=10', 9000);
+    if (r.status === 429 || r.status === 403) { googleApiDead = true; return null; }
+    if (!r.ok) return null;
+    coverNet.ok = true;
+    const j = await r.json();
+    const tq = norm(b.title), pq = norm(b.publisher || ''), aq = norm((b.author || '').split(/[ 　、,]/)[0]);
+    for (const it of (j.items || [])) {
+      const v = it.volumeInfo || {};
+      if (v.language && v.language !== 'ja') continue;
+      const t = norm(v.title || '');
+      if (!(t === tq || (t.startsWith(tq) && /^[0-9一二三四五六七八九十上中下巻第]+$/.test(t.slice(tq.length))))) continue;
+      const hit = (aq && (v.authors || []).some((a) => norm(a).includes(aq))) || (pq.length >= 2 && norm(v.publisher || '').includes(pq));
+      if (!hit) continue;
+      for (const idf of (v.industryIdentifiers || [])) if (idf.type === 'ISBN_13' && /^9784/.test(idf.identifier)) { const x = await coverFromIsbn(idf.identifier); if (x) return x; }
+      const th = v.imageLinks && v.imageLinks.thumbnail;
+      if (th) { const x = await loadCover(th.replace(/^http:/, 'https:'), 0); if (x) return x; }
+    }
+  } catch { /* 次へ */ }
+  return null;
+}
+function toJpegBlob(img, max = 600) {
+  const k = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+  const c = document.createElement('canvas'); c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
+  const ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height); ctx.drawImage(img, 0, 0, c.width, c.height);
+  return new Promise((res) => c.toBlob(res, 'image/jpeg', 0.85));
+}
+async function cacheGet(id) { try { const c = await caches.open(COVER_CACHE); const r = await c.match(coverKey(id)); return r ? await r.blob() : null; } catch { return null; } }
+async function cachePut(id, blob) { try { const c = await caches.open(COVER_CACHE); await c.put(coverKey(id), new Response(blob, { headers: { 'Content-Type': 'image/jpeg' } })); } catch { /* 保存できなくても表示はする */ } }
+/** その本の表紙の Blob(保存済み→なければ探す)。見つからなければ null */
+async function getCoverBlob(b, { allowTitle = true } = {}) {
+  const hit = await cacheGet(b.id); if (hit) return hit;
+  coverNet.ok = false;
+  let found = null;
+  for (const isbn of coverIsbns(b).slice(0, 2)) { found = await coverFromIsbn(isbn); if (found) break; }
+  if (!found && allowTitle) found = await coverFromTitle(b);
+  if (!found) { if (coverNet.ok) { state.noCover[b.id] = Date.now(); persist.noCover(); } return null; }
+  const blob = await toJpegBlob(found.img); if (!blob) return null;
+  await cachePut(b.id, blob); delete state.noCover[b.id];
+  return blob;
+}
+/** 表示中の表紙を埋める(保存済みは即表示、なければ3冊ずつ探す) */
+let hydrateTimer = 0, hydrateTitle = false;
+function hydrateCovers(allowTitle = false) {
+  hydrateTitle = hydrateTitle || allowTitle;
+  clearTimeout(hydrateTimer);
+  hydrateTimer = setTimeout(async () => {
+    const withTitle = hydrateTitle; hydrateTitle = false;
+    const ids = [...new Set($$('#view .cover[data-cover]:not([data-done])').map((el) => el.dataset.cover))].filter((id) => !coverInflight.has(id));
+    let i = 0;
+    const work = async () => {
+      for (;;) {
+        const id = ids[i++]; if (!id) return;
+        const b = getBook(id); if (!b) continue;
+        coverInflight.add(id);
+        try {
+          const cached = await cacheGet(id);
+          if (cached) { const u = URL.createObjectURL(cached); coverUrlMap.set(id, u); paintCover(id, u); continue; }
+          if (noCoverFresh(id)) { paintCover(id, null); continue; }
+          const hasIsbn = coverIsbns(b).length > 0;
+          if (!hasIsbn && !withTitle) continue;   // ISBN調べが終わるまで待つ
+          const blob = await getCoverBlob(b, { allowTitle: true });
+          if (blob) { const u = URL.createObjectURL(blob); coverUrlMap.set(id, u); paintCover(id, u); } else if (noCoverFresh(id)) paintCover(id, null);
+        } finally { coverInflight.delete(id); }
+      }
+    };
+    await Promise.all([work(), work(), work()]);
+  }, 60);
+}
 function setCoverFor(id) {
   $$(`[data-book="${CSS.escape(id)}"] .book-main`).forEach((el) => {
     if (el.querySelector('.cover')) return;
     const b = getBook(id); if (!b) return;
     el.insertAdjacentHTML('afterbegin', coverHtml(b));
   });
+  hydrateCovers();
 }
 const coverTried = new Set();
 let coverRun = 0;
@@ -324,7 +458,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /* 表示中の本のうち、ISBNが分かっていないものを、Workerに問い合わせて表紙を出す(少しずつ・混雑時は待つ) */
 async function ensureCovers() {
   const run = ++coverRun;
-  if (!HAS_BACKEND || useMock() || !['kumon', 'search', 'favorites'].includes(parseRoute().name)) return;
+  if (!['kumon', 'search', 'favorites'].includes(parseRoute().name)) return;
+  hydrateCovers();
+  if (!HAS_BACKEND || useMock()) { hydrateCovers(true); return; }
   let todo = currentVisibleIds().filter((id) => BOOK_BY_ID.has(id) && !(state.isbns[id] || []).length && !coverTried.has(id));
   let busyCount = 0;
   for (let round = 0; todo.length && round < 40; round++) {
@@ -339,6 +475,7 @@ async function ensureCovers() {
     if (res.busy) { if (++busyCount >= 3) break; await sleep(8000); } else if (res.pending <= 0) break; else await sleep(900);
   }
   todo.forEach((id) => coverTried.add(id));
+  hydrateCovers(true);
 }
 
 function bookCardHtml(b) {
@@ -620,7 +757,7 @@ function bookView(id) {
 /* ================= 表紙ラベル印刷(25mm角・A4・PDF) ================= */
 const labelUi = { src: 'fav', sel: null, mode: 'contain', cut: true, busy: false, result: null };
 const labelSources = () => [['fav', 'お気に入り'], ['read', '読んだ本'], ...LEVELS.map((lv) => [`lv:${lv}`, `推薦図書 ${lv}`]), ['lv:other', '推薦図書以外(追加した本)']];
-const isbnsOf = (b) => (state.isbns[b.id] || b.isbns || []);
+const isbnsOf = (b) => jpIsbns(state.isbns[b.id] || b.isbns || []);
 function labelCandidates(src) {
   if (src === 'fav') return Object.keys(state.fav).map(getBook).filter(Boolean);
   if (src === 'read') return Object.keys(state.read).map(getBook).filter(Boolean);
@@ -698,7 +835,9 @@ async function makeLabels() {
       for (;;) {
         const i = next++; if (i >= ready.length) return;
         const { b, isbns } = ready[i];
-        const img = await self.Labels.fetchCover(isbns);
+        let img = null;
+        try { const cb = await getCoverBlob(b, { allowTitle: true }); if (cb) img = await decodeImg(cb); } catch { /* 下で再試行 */ }
+        if (!img) img = await self.Labels.fetchCover(isbns);
         if (img) out[i] = { b, image: self.Labels.toSquare(img, labelUi.mode) }; else skipped.push({ b, why: '表紙画像が見つかりません' });
         prog(`表紙を取得中… ${++done}/${ready.length}`);
       }
