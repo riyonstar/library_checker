@@ -5,7 +5,8 @@
  *
  * ファイルを更新したら CACHE_VERSION を上げてください。
  */
-const CACHE_VERSION = 'kitalib-v6';
+const CACHE_VERSION = 'kitalib-v7';
+const COVER_CACHE = 'kitalib-covers';   // 表紙画像は変わらないので、一度取ったら端末に保存して使い回す
 const APP_SHELL = [
   './', 'index.html', 'style.css', 'app.js', 'labels.js', 'config.js', 'data.js',
   'books.json', 'libraries.json', 'manifest.json',
@@ -24,7 +25,7 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE_VERSION).map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE_VERSION && k !== COVER_CACHE).map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
@@ -33,6 +34,23 @@ self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
+  // 表紙画像(Google ブックス): 保存済みならそれを使い、通信しない
+  if (url.hostname === 'books.google.com' && url.pathname.startsWith('/books/content')) {
+    event.respondWith((async () => {
+      const cache = await caches.open(COVER_CACHE);
+      const hit = await cache.match(req.url);
+      if (hit) return hit;
+      try {   // 中身を確認できる方法で取得し、正常な画像だけ保存
+        const r = await fetch(req.url, { mode: 'cors', credentials: 'omit', referrerPolicy: 'no-referrer' });
+        if (r.ok) { cache.put(req.url, r.clone()); return r; }
+        return r;
+      } catch (e) { /* CORSで取れない場合は通常の取得 */ }
+      const r = await fetch(req);
+      if (r.type === 'opaque') cache.put(req.url, r.clone()).catch(() => {});
+      return r;
+    })());
+    return;
+  }
   // 別オリジン(バックエンドAPIなど)はキャッシュしない = 在架状況は常に新しく取りに行く
   if (url.origin !== self.location.origin) return;
 

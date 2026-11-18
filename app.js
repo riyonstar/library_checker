@@ -6,7 +6,7 @@
 'use strict';
 
 /* ================= 設定・データ ================= */
-const APP_VERSION = '2026-11-17 e(日本語版+ラベル印刷)';
+const APP_VERSION = '2026-11-18 f(高速化)';
 const CFG = self.APP_CONFIG || {};
 const BACKEND = (CFG.BACKEND_URL || '').replace(/\/+$/, '');
 const HAS_BACKEND = !!BACKEND;
@@ -39,6 +39,7 @@ const state = {
   settings: store.get('settings', {}),  // { libs:[], mock:null|bool, level, pushOn }
   isbns: store.get('isbns', {}),        // { bookId: [isbn13...] } (カーリルへのリンク・表紙用)
   read: store.get('read', {}),          // { bookId: true } 「読んだ」チェック
+  noCover: store.get('nocover', {}),    // { bookId: true } 表紙が見つからなかった本(次回から探さない)
   custom: store.get('custom', {}),      // { bookId: {book, level, addedAt} } 検索から推薦図書リストに追加した本
   loading: new Set(),                   // 確認中の本ID
   progress: null,                       // 一括確認の進捗表示
@@ -51,6 +52,7 @@ const persist = {
   isbns: () => store.set('isbns', state.isbns),
   read: () => store.set('read', state.read),
   custom: () => store.set('custom', state.custom),
+  noCover: () => store.set('nocover', state.noCover),
 };
 const OTHER = 'other';                                   // 「推薦図書以外」のラベル
 const levelLabel = (lv) => (lv === OTHER ? '推薦図書以外' : lv);
@@ -294,13 +296,18 @@ const coverUrl = (isbn) => `https://books.google.com/books/content?vid=ISBN${isb
 function coverHtml(b) {
   const list = (state.isbns[b.id] || b.isbns || []).slice(0, 4);
   if (!list.length) return '';
+  if (state.noCover[b.id]) return '<div class="cover none"><span>📕<br>表紙<br>なし</span></div>';
   return `<div class="cover"><img class="cover-img" src="${esc(coverUrl(list[0]))}" data-isbns="${esc(list.join(','))}" data-step="0" alt="${esc(b.title)}の表紙" loading="lazy" decoding="async" referrerpolicy="no-referrer"></div>`;
 }
 function coverFallback(img) {
   const list = (img.dataset.isbns || '').split(',').filter(Boolean);
   const next = Number(img.dataset.step || 0) + 1;
   if (next < list.length) { img.dataset.step = String(next); img.src = coverUrl(list[next]); }
-  else { const box = img.closest('.cover'); if (box) { box.classList.add('none'); box.innerHTML = '<span>📕<br>表紙<br>なし</span>'; } }   // どのISBNにも画像がない
+  else {   // どのISBNにも画像がない(オフライン中は記録しない)
+    const box = img.closest('.cover'); if (box) { box.classList.add('none'); box.innerHTML = '<span>📕<br>表紙<br>なし</span>'; }
+    const id = img.closest('[data-book]')?.dataset.book;
+    if (id && navigator.onLine !== false && !state.noCover[id]) { state.noCover[id] = true; persist.noCover(); }
+  }
 }
 document.addEventListener('error', (ev) => { const i = ev.target; if (i instanceof HTMLImageElement && i.classList.contains('cover-img')) coverFallback(i); }, true);
 document.addEventListener('load', (ev) => { const i = ev.target; if (i instanceof HTMLImageElement && i.classList.contains('cover-img') && i.naturalWidth <= 20) coverFallback(i); }, true);
@@ -765,10 +772,8 @@ document.addEventListener('click', async (ev) => {
   if (t.dataset.labelMake !== undefined) { ev.preventDefault(); await makeLabels(); return; }
   if (t.dataset.check) {
     ev.preventDefault();
-    // 推薦図書ページは、絞り込みで隠れている本も含めて、そのレベル全体を確認する(絞り込みの結果を正しくするため)
-    const r = parseRoute();
-    const ids = r.name === 'kumon' ? [...BOOKS.filter((b) => b.level === state.settings.level), ...customBooks(state.settings.level)].map((b) => b.id) : currentVisibleIds();
-    await checkBooks(ids); return;
+    // 画面に表示されている(絞り込み後の)本だけを確認する
+    await checkBooks(currentVisibleIds()); return;
   }
   if (t.dataset.level) { location.hash = `#/kumon?level=${encodeURIComponent(t.dataset.level)}`; return; }
   if (t.id === 'ext-search') { await runExtSearch(); return; }
@@ -834,8 +839,8 @@ function toggleFav(id) {
   } else {
     state.fav[id] = { bookId: id, addedAt: nowIso(), ...(b.isKumonRecommended ? {} : { book: { id: b.id, title: b.title, author: b.author, publisher: b.publisher, isbns: b.isbns || [], isKumonRecommended: false, authors: [], contributors: [] } }) };
     toast('お気に入りに追加しました');
-    // 登録時にいまの状態を保存(これが「前回の状態」になる)
-    checkBooks([id], { quiet: true });
+    // 一度も確認していない本だけ、登録時にいまの状態を保存(これが「前回の状態」になる)。確認済みなら取り直さない
+    if (!selectedLibs().some((l) => recOf(id, l.id))) checkBooks([id], { quiet: true });
   }
   persist.fav();
   $$(`[data-fav="${CSS.escape(id)}"]`).forEach((btn) => {
