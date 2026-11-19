@@ -1,0 +1,31 @@
+# 【GitHubの画面で .github/workflows/bake.yml として作成して貼り付ける】
+# 目的: くもんの推薦図書の「ISBN」と「表紙画像」を、一度だけ集めて、このリポジトリに保存します(手動実行専用)。
+#       保存後は、アプリが毎回ネットで探しに行かなくて済みます。
+#       結果は books.json / covers/ フォルダ / bake-report.txt に保存されます。足りない本があれば、もう一度実行すると続きから集めます。
+name: bake
+on:
+  workflow_dispatch: {}
+
+jobs:
+  bake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: 画像加工ツールを用意
+        run: npm install --no-save --no-package-lock sharp
+      - name: ISBNと表紙を集める
+        run: node bake.mjs
+      - name: data.js を作り直す
+        run: node build-data.mjs
+      - name: 結果を保存(コミット)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A books.json data.js covers bake-report.txt
+          git diff --cached --quiet && echo "変更なし" || (git commit -m "ISBNと表紙を保存 (bake)" && git push)
