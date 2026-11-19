@@ -6,7 +6,7 @@
 'use strict';
 
 /* ================= 設定・データ ================= */
-const APP_VERSION = '2026-11-18 f(高速化)';
+const APP_VERSION = '2026-11-19 g(表紙とISBNを保存)';
 const CFG = self.APP_CONFIG || {};
 const BACKEND = (CFG.BACKEND_URL || '').replace(/\/+$/, '');
 const HAS_BACKEND = !!BACKEND;
@@ -304,18 +304,31 @@ const coverInflight = new Set();
 const NO_COVER_TTL = 24 * 3600 * 1000;
 const noCoverFresh = (id) => state.noCover[id] && Date.now() - Number(state.noCover[id]) < NO_COVER_TTL;
 const NONE_BOX = '<span>📕<br>表紙<br>なし</span>';
+const staticBad = new Set();   // 保存済み画像が読めなかった本(その場合は探して取る)
 function coverHtml(b) {
+  if (b.cover && !staticBad.has(b.id)) return `<div class="cover" data-cover="${esc(b.id)}" data-done="1"><img class="cover-img" data-static="1" src="${esc(b.cover)}" alt="${esc(b.title)}の表紙" loading="lazy" decoding="async"></div>`;
   const u = coverUrlMap.get(b.id);
   if (u) return `<div class="cover" data-cover="${esc(b.id)}" data-done="1"><img class="cover-img" src="${esc(u)}" alt="${esc(b.title)}の表紙" decoding="async"></div>`;
   if (noCoverFresh(b.id)) return `<div class="cover none" data-cover="${esc(b.id)}" data-done="1">${NONE_BOX}</div>`;
   return `<div class="cover wait" data-cover="${esc(b.id)}"></div>`;
 }
+document.addEventListener('error', (ev) => {
+  const i = ev.target;
+  if (!(i instanceof HTMLImageElement) || !i.dataset.static) return;
+  const el = i.closest('.cover'); const id = el?.dataset.cover; if (!id) return;
+  staticBad.add(id); el.classList.add('wait'); el.innerHTML = ''; delete el.dataset.done; hydrateCovers(true);
+}, true);
 function paintCover(id, url) {
   $$(`.cover[data-cover="${CSS.escape(id)}"]`).forEach((el) => {
     el.dataset.done = '1'; el.classList.remove('wait');
     if (url) { el.classList.remove('none'); el.innerHTML = `<img class="cover-img" src="${esc(url)}" alt="" decoding="async">`; }
     else { el.classList.add('none'); el.innerHTML = NONE_BOX; }
   });
+}
+function isbn10Of(i13) {
+  if (!/^978\d{10}$/.test(i13)) return null;
+  let sum = 0; for (let i = 0; i < 9; i++) sum += Number(i13[3 + i]) * (10 - i);
+  const c = (11 - (sum % 11)) % 11; return i13.slice(3, 12) + (c === 10 ? 'X' : String(c));
 }
 const proxiedImg = (url) => 'https://images.weserv.nl/?url=' + encodeURIComponent(url.replace(/^https?:\/\//, ''));
 async function fetchTo(url, ms = 9000) {
@@ -366,6 +379,7 @@ async function coverFromIsbn(isbn) {
     coverNet.ok = true; if (c) cands.push([c, 0]);
   } catch { /* 次へ */ }
   cands.push([`https://cover.openbd.jp/${isbn}.jpg`, 0], [`https://ndlsearch.ndl.go.jp/thumbnail/${isbn}.jpg`, 0]);
+  const a10 = isbn10Of(isbn); if (a10) cands.push([`https://images-na.ssl-images-amazon.com/images/P/${a10}.09.LZZZZZZZ.jpg`, 0]);
   for (const z of [2, 1]) cands.push([`https://books.google.com/books/content?vid=ISBN${isbn}&printsec=frontcover&img=1&zoom=${z}`, z]);
   for (const [u, z] of cands) { const r = await loadCover(u, z); if (r) return r; }
   return null;
@@ -429,6 +443,7 @@ function hydrateCovers(allowTitle = false) {
       for (;;) {
         const id = ids[i++]; if (!id) return;
         const b = getBook(id); if (!b) continue;
+        if (b.cover && !staticBad.has(id)) continue;
         coverInflight.add(id);
         try {
           const cached = await cacheGet(id);
@@ -461,7 +476,7 @@ async function ensureCovers() {
   if (!['kumon', 'search', 'favorites'].includes(parseRoute().name)) return;
   hydrateCovers();
   if (!HAS_BACKEND || useMock()) { hydrateCovers(true); return; }
-  let todo = currentVisibleIds().filter((id) => BOOK_BY_ID.has(id) && !(state.isbns[id] || []).length && !coverTried.has(id));
+  let todo = currentVisibleIds().filter((id) => BOOK_BY_ID.has(id) && !isbnsOf(BOOK_BY_ID.get(id)).length && !coverTried.has(id));
   let busyCount = 0;
   for (let round = 0; todo.length && round < 40; round++) {
     if (run !== coverRun) return;
@@ -1106,7 +1121,9 @@ async function loadData() {
   // index.html を直接開いたとき(file://)や読み込み失敗時は data.js を使う
   if (!d) d = self.APP_DATA;
   if (!d) throw new Error('data');
-  BOOKS = d.books.books; LIBS = d.libraries.libraries; PROVIDER = d.libraries.provider || {};
+  BOOKS = d.books.books;
+  for (const b of BOOKS) if (b.isbn && !b.isbns) b.isbns = [].concat(b.isbn);   // bake で保存済みのISBN
+  LIBS = d.libraries.libraries; PROVIDER = d.libraries.provider || {};
   BOOKS.forEach((b) => { b._n = norm([b.title, b.searchTitle, b.author, (b.contributors || []).join(' '), b.publisher].join(' ')); });
   BOOK_BY_ID = new Map(BOOKS.map((b) => [b.id, b]));
   LEVELS = [...new Set(BOOKS.map((b) => b.level))];
