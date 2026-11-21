@@ -1099,7 +1099,8 @@
    "order": 47,
    "isKumonRecommended": true,
    "isNewIn2026": false,
-   "isbn": null
+   "isbn": "9784251001115",
+   "cover": "covers/k-5A-47.jpg"
   },
   {
    "id": "k-5A-48",
@@ -16012,7 +16013,8 @@
    "order": 42,
    "isKumonRecommended": true,
    "isNewIn2026": false,
-   "isbn": null
+   "isbn": "9784102079010",
+   "cover": "covers/k-I-42.jpg"
   },
   {
    "id": "k-I-43",
@@ -16037,7 +16039,8 @@
    "order": 43,
    "isKumonRecommended": true,
    "isNewIn2026": false,
-   "isbn": null
+   "isbn": "9784042334019",
+   "cover": "covers/k-I-43.jpg"
   },
   {
    "id": "k-I-44",
