@@ -5,7 +5,7 @@
 // すでに集めた本は飛ばします。何度実行しても安全です(足りない本だけ再挑戦)。
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { pickIsbns, parseNdlOpenSearch, toIsbn13 } from './worker.js';
+import { pickIsbns, parseNdlOpenSearch, toIsbn13, normText } from './worker.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const sha = (buf) => createHash('sha1').update(buf).digest('hex');
@@ -61,6 +61,41 @@ async function findIsbns(book) {
   return [];
 }
 
+/* ---------- ISBN(2段目): Google ブックスで、書名・著者・出版社が合う日本語の本を探す ---------- */
+let googleDead = 0;
+async function googleFind(book) {
+  if (googleDead >= 5) return null;
+  const title = String(book.searchTitle || book.title).replace(/[（(]\d+冊[）)]/g, '').trim();
+  const au = String(book.author || '').split(/[ 　・（(、,]/)[0];
+  const q = `intitle:${title}` + (au ? `+inauthor:${au}` : '');
+  await sleep(1200);
+  const j = await get('https://www.googleapis.com/books/v1/volumes?q=' + encodeURIComponent(q).replace(/%2B/g, '+') + '&langRestrict=ja&printType=books&maxResults=20', { json: true, retries: 2 });
+  if (!j) { googleDead++; return null; }
+  googleDead = 0;
+  const tq = normText(title), aq = normText(au);
+  const stripPub = (x) => normText(x).replace(/株式会社|有限会社|出版部|出版社|出版|発行所|発行/g, '');
+  const pq = stripPub(book.publisher || '');
+  const isbns = []; let thumb = null;
+  for (const it of (j.items || [])) {
+    const v = it.volumeInfo || {};
+    if (v.language && v.language !== 'ja') continue;
+    const t = normText(v.title || '');
+    if (!(t === tq || (t.startsWith(tq) && /^[0-9一二三四五六七八九十上中下巻第]+$/.test(t.slice(tq.length))))) continue;
+    const np = stripPub(v.publisher || '');
+    const hit = (aq.length >= 2 && (v.authors || []).some((a) => normText(a).includes(aq))) || (pq.length >= 2 && np.length >= 2 && (np.includes(pq) || pq.includes(np)));
+    if (!hit) continue;
+    for (const idf of (v.industryIdentifiers || [])) { const x = toIsbn13(idf.identifier); if (x && /^9784/.test(x) && !isbns.includes(x)) isbns.push(x); }
+    if (!thumb && v.imageLinks && v.imageLinks.thumbnail) thumb = v.imageLinks.thumbnail.replace(/^http:/, 'https:');
+  }
+  return { isbns: isbns.slice(0, 4), thumb };
+}
+async function fromUrl(url) {
+  const buf = await get(url, { retries: 1 });
+  if (!buf || buf.length < 800) return null;
+  if (sharp) { try { const m = await sharp(buf).metadata(); if (Math.min(m.width, m.height) < 100) return null; return await sharp(buf).resize({ width: 400, height: 400, fit: 'inside', withoutEnlargement: true }).flatten({ background: '#fff' }).jpeg({ quality: 82 }).toBuffer(); } catch { return null; } }
+  return buf[0] === 0xff && buf[1] === 0xd8 ? buf : null;
+}
+
 /* ---------- 表紙 ---------- */
 const gUrl = (isbn, z) => `https://books.google.com/books/content?vid=ISBN${isbn}&printsec=frontcover&img=1&zoom=${z}`;
 const phRef = {};
@@ -102,6 +137,12 @@ export async function main() {
   const file = new URL('./books.json', import.meta.url);
   const data = JSON.parse(readFileSync(file, 'utf8'));
   mkdirSync(new URL('./covers/', import.meta.url), { recursive: true });
+  // 手入力のISBN(任意): manual-isbn.json に { "本のID": "ISBN" } の形で書くと、最優先で使う
+  const mf = new URL('./manual-isbn.json', import.meta.url);
+  if (existsSync(mf)) {
+    const man = JSON.parse(readFileSync(mf, 'utf8'));
+    for (const b of data.books) if (man[b.id]) { const l = [].concat(man[b.id]).map(toIsbn13).filter(Boolean); if (l.length) b.isbn = l.length === 1 ? l[0] : l; }
+  }
   const missingIsbn = [], missingCover = [];
   let n = 0;
   for (const b of data.books) {
@@ -112,6 +153,15 @@ export async function main() {
     if (!isbns.length) {
       const got = await findIsbns(b);
       if (got && got.length) { b.isbn = got.length === 1 ? got[0] : got; isbns = got; }
+    }
+    let thumb = null;
+    if (!isbns.length) {
+      const g = await googleFind(b);
+      if (g) { thumb = g.thumb; if (g.isbns.length) { b.isbn = g.isbns.length === 1 ? g.isbns[0] : g.isbns; isbns = g.isbns; } }
+    }
+    if (!isbns.length && thumb && !have) {      // ISBNは分からないが、Google に表紙はある
+      const img = await fromUrl(thumb);
+      if (img) { writeFileSync(path, img); b.cover = `covers/${b.id}.jpg`; }
     }
     if (!isbns.length) missingIsbn.push(b);
     if (isbns.length && !have) {
