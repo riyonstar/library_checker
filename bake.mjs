@@ -139,9 +139,25 @@ export async function main() {
   mkdirSync(new URL('./covers/', import.meta.url), { recursive: true });
   // 手入力のISBN(任意): manual-isbn.json に { "本のID": "ISBN" } の形で書くと、最優先で使う
   const mf = new URL('./manual-isbn.json', import.meta.url);
+  const manualNote = [];
   if (existsSync(mf)) {
     const man = JSON.parse(readFileSync(mf, 'utf8'));
-    for (const b of data.books) if (man[b.id]) { const l = [].concat(man[b.id]).map(toIsbn13).filter(Boolean); if (l.length) b.isbn = l.length === 1 ? l[0] : l; }
+    for (const b of data.books) {
+      if (!man[b.id]) continue;
+      const l = [].concat(man[b.id]).map(toIsbn13).filter(Boolean);
+      if (!l.length) continue;
+      // 取り違え防止: openBD に載っていれば、書名か出版社のどちらかは合っているか確認する(両方違えば採用しない)
+      const j = await get('https://api.openbd.jp/v1/get?isbn=' + l[0], { json: true, retries: 1 });
+      const sm = j && j[0] && j[0].summary;
+      if (sm) {
+        const t = normText(String(b.searchTitle || b.title).replace(/[（(]\d+冊[）)]/g, '')), ot = normText(sm.title || '');
+        const titleOk = ot.includes(t) || (ot.length >= 2 && t.includes(ot));
+        const pq = normText(b.publisher || '').replace(/出版|株式会社/g, ''), op = normText(sm.publisher || '').replace(/出版|株式会社/g, '');
+        const pubOk = pq.length >= 2 && op.length >= 2 && (op.includes(pq) || pq.includes(op));
+        if (!titleOk && !pubOk) { manualNote.push(`${b.id}\t${b.title}\t手入力 ${l[0]} は openBD の「${sm.title}(${sm.publisher})」と合わないため不採用`); continue; }
+      } else manualNote.push(`${b.id}\t${b.title}\t手入力 ${l[0]} は openBD に載っていないため、確認できないまま採用`);
+      b.isbn = l.length === 1 ? l[0] : l;
+    }
   }
   const missingIsbn = [], missingCover = [];
   let n = 0;
@@ -174,6 +190,7 @@ export async function main() {
   writeFileSync(file, JSON.stringify(data, null, 1) + '\n');
   const lines = [
     `集計: 全${data.books.length}冊 / ISBNあり ${data.books.filter((b) => b.isbn).length} / 表紙あり ${data.books.filter((b) => b.cover).length}`,
+    '', '【手入力ISBNの確認結果(問題があるものだけ)】', ...manualNote,
     '', '【ISBNが分からなかった本】', ...missingIsbn.map((b) => `${b.id}\t${b.title}\t${b.publisher || ''}`),
     '', '【ISBNは分かったが表紙が見つからなかった本】', ...missingCover.map((b) => `${b.id}\t${b.title}\t${[].concat(b.isbn).join(',')}`),
   ];
