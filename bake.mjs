@@ -3,7 +3,7 @@
 //   - ISBN: 国立国会図書館サーチ(日本語版=978-4 だけ採用)→ books.json の isbn に書き込む
 //   - 表紙: openBD → 国立国会図書館 → Amazon → Google ブックス(「画像なし」の灰色の絵は除外)→ covers/<id>.jpg
 // すでに集めた本は飛ばします。何度実行しても安全です(足りない本だけ再挑戦)。
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, unlinkSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { pickIsbns, parseNdlOpenSearch, toIsbn13, normText } from './worker.js';
 
@@ -55,13 +55,14 @@ async function findIsbns(book) {
   for (const [p, cnt] of attempts) {
     const items = await ndl(p, cnt);
     if (items == null) return null;       // 通信できなかった(今回は判断しない)
-    const got = pickIsbns(book, items);
+    const got = pickIsbns(book, items).filter((i) => !englishIsbns.has(i));
     if (got.length) return got;
   }
   return [];
 }
 
 /* ---------- ISBN(2段目): Google ブックスで、書名・著者・出版社が合う日本語の本を探す ---------- */
+const englishIsbns = new Set();
 let googleDead = 0;
 async function googleFind(book) {
   if (googleDead >= 5) return null;
@@ -84,7 +85,7 @@ async function googleFind(book) {
     const np = stripPub(v.publisher || '');
     const hit = (aq.length >= 2 && (v.authors || []).some((a) => normText(a).includes(aq))) || (pq.length >= 2 && np.length >= 2 && (np.includes(pq) || pq.includes(np)));
     if (!hit) continue;
-    for (const idf of (v.industryIdentifiers || [])) { const x = toIsbn13(idf.identifier); if (x && /^9784/.test(x) && !isbns.includes(x)) isbns.push(x); }
+    for (const idf of (v.industryIdentifiers || [])) { const x = toIsbn13(idf.identifier); if (x && /^9784/.test(x) && !isbns.includes(x) && !englishIsbns.has(x)) isbns.push(x); }
     if (!thumb && v.imageLinks && v.imageLinks.thumbnail) thumb = v.imageLinks.thumbnail.replace(/^http:/, 'https:');
   }
   return { isbns: isbns.slice(0, 4), thumb };
@@ -112,6 +113,7 @@ async function candidates(isbn) {
   for (const z of [3, 2, 1]) list.push([gUrl(isbn, z), z]);
   return list;
 }
+const badCovers = new Set();   // 「画像なし」など、複数の本で同じになってしまう画像(sha1)
 async function coverFor(isbns) {
   for (const isbn of isbns.slice(0, 3)) {
     for (const [url, z] of await candidates(isbn)) {
@@ -123,10 +125,12 @@ async function coverFor(isbns) {
         try {
           const m = await sharp(buf).metadata();
           if (Math.min(m.width, m.height) < 100) continue;
-          return await sharp(buf).rotate().resize({ width: 400, height: 400, fit: 'inside', withoutEnlargement: true }).flatten({ background: '#fff' }).jpeg({ quality: 82 }).toBuffer();
+          const out = await sharp(buf).rotate().resize({ width: 400, height: 400, fit: 'inside', withoutEnlargement: true }).flatten({ background: '#fff' }).jpeg({ quality: 82 }).toBuffer();
+          if (badCovers.has(sha(out))) continue;
+          return out;
         } catch { continue; }
       }
-      if (buf[0] === 0xff && buf[1] === 0xd8) return buf;       // sharp なし: JPEG のみ採用
+      if (buf[0] === 0xff && buf[1] === 0xd8 && !badCovers.has(sha(buf))) return buf;       // sharp なし: JPEG のみ採用
     }
   }
   return null;
@@ -159,6 +163,43 @@ export async function main() {
       b.isbn = l.length === 1 ? l[0] : l;
     }
   }
+  // (1) 同じ画像が4冊以上で使われていたら「画像なし」などの代わりの絵とみなし、削除してやり直す
+  const byHash = new Map();
+  for (const f of readdirSync(new URL('./covers/', import.meta.url))) {
+    if (!f.endsWith('.jpg')) continue;
+    const h = sha(readFileSync(new URL('./covers/' + f, import.meta.url)));
+    (byHash.get(h) || byHash.set(h, []).get(h)).push(f);
+  }
+  let removedPh = 0;
+  for (const [h, files] of byHash) if (files.length >= 4) {
+    badCovers.add(h);
+    for (const f of files) { unlinkSync(new URL('./covers/' + f, import.meta.url)); removedPh++; }
+  }
+  if (removedPh) { for (const b of data.books) if (b.cover && !existsSync(new URL('./' + b.cover, import.meta.url))) delete b.cover; console.log(`代わりの絵と思われる画像を ${removedPh} 枚削除しました(取り直します)`); }
+  // (2) 英語版(英語でたのしむ福音館の絵本 など)のISBNを除く: openBD の書名に英単語があり、本の書名にはない場合
+  const manualIds = existsSync(mf) ? new Set(Object.keys(JSON.parse(readFileSync(mf, 'utf8')))) : new Set();
+  const allIsbns = [...new Set(data.books.filter((b) => !manualIds.has(b.id)).flatMap((b) => [].concat(b.isbn || []).map(toIsbn13).filter(Boolean)))];
+  const ob = new Map();
+  for (let i = 0; i < allIsbns.length; i += 50) {
+    const j = await get('https://api.openbd.jp/v1/get?isbn=' + allIsbns.slice(i, i + 50).join(','), { json: true, retries: 2, ms: 30000 });
+    (j || []).forEach((x) => { if (x && x.summary) ob.set(x.summary.isbn, x); });
+    await sleep(300);
+  }
+  const latin = /[A-Za-z]{3,}/;
+  let droppedEn = 0;
+  for (const b of data.books) {
+    if (manualIds.has(b.id) || !b.isbn) continue;
+    const old = [].concat(b.isbn).map(toIsbn13).filter(Boolean);
+    const keep = old.filter((i) => { const x = ob.get(i); if (!x) return true; const en = latin.test(x.summary.title || '') && !latin.test(b.title); if (en) { englishIsbns.add(i); } return !en; });
+    if (keep.length !== old.length) {
+      droppedEn += old.length - keep.length;
+      if (keep.length) b.isbn = keep.length === 1 ? keep[0] : keep; else b.isbn = null;
+      const p = new URL(`./covers/${b.id}.jpg`, import.meta.url);
+      if (existsSync(p)) unlinkSync(p);
+      delete b.cover;
+    }
+  }
+  if (droppedEn) console.log(`英語版と思われる ISBN を ${droppedEn} 件除きました(表紙を取り直します)`);
   const missingIsbn = [], missingCover = [];
   let n = 0;
   for (const b of data.books) {
