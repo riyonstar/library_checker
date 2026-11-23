@@ -1244,8 +1244,7 @@
    "isbn": [
     "9784580804791",
     "9784580811270"
-   ],
-   "cover": "covers/k-4A-03.jpg"
+   ]
   },
   {
    "id": "k-4A-04",
@@ -2550,7 +2549,8 @@
    "order": 7,
    "isKumonRecommended": true,
    "isNewIn2026": false,
-   "isbn": null
+   "isbn": "9784834027471",
+   "cover": "covers/k-3A-07.jpg"
   },
   {
    "id": "k-3A-08",
@@ -3631,7 +3631,8 @@
    "order": 50,
    "isKumonRecommended": true,
    "isNewIn2026": true,
-   "isbn": null
+   "isbn": "9784198622961",
+   "cover": "covers/k-3A-50.jpg"
   },
   {
    "id": "k-2A-01",
@@ -3808,8 +3809,7 @@
    "order": 7,
    "isKumonRecommended": true,
    "isNewIn2026": false,
-   "isbn": "9784580804081",
-   "cover": "covers/k-2A-07.jpg"
+   "isbn": "9784580804081"
   },
   {
    "id": "k-2A-08",
@@ -5561,8 +5561,7 @@
    "order": 27,
    "isKumonRecommended": true,
    "isNewIn2026": false,
-   "isbn": "9784477000220",
-   "cover": "covers/k-A-27.jpg"
+   "isbn": "9784477000220"
   },
   {
    "id": "k-A-28",
@@ -6267,8 +6266,7 @@
    "order": 4,
    "isKumonRecommended": true,
    "isNewIn2026": false,
-   "isbn": "9784580811355",
-   "cover": "covers/k-B-04.jpg"
+   "isbn": "9784580811355"
   },
   {
    "id": "k-B-05",
@@ -7080,8 +7078,7 @@
    "order": 36,
    "isKumonRecommended": true,
    "isNewIn2026": false,
-   "isbn": "9784265012169",
-   "cover": "covers/k-B-36.jpg"
+   "isbn": "9784265012169"
   },
   {
    "id": "k-B-37",
@@ -8222,8 +8219,7 @@
    "order": 29,
    "isKumonRecommended": true,
    "isNewIn2026": false,
-   "isbn": "9784251100214",
-   "cover": "covers/k-C-29.jpg"
+   "isbn": "9784251100214"
   },
   {
    "id": "k-C-30",
@@ -9523,8 +9519,7 @@
    "order": 29,
    "isKumonRecommended": true,
    "isNewIn2026": false,
-   "isbn": "9784580804258",
-   "cover": "covers/k-D-29.jpg"
+   "isbn": "9784580804258"
   },
   {
    "id": "k-D-30",
@@ -9710,7 +9705,8 @@
    "order": 36,
    "isKumonRecommended": true,
    "isNewIn2026": false,
-   "isbn": null
+   "isbn": "9784834081848",
+   "cover": "covers/k-D-36.jpg"
   },
   {
    "id": "k-D-37",
@@ -9811,8 +9807,7 @@
    "order": 40,
    "isKumonRecommended": true,
    "isNewIn2026": false,
-   "isbn": "9784061475045",
-   "cover": "covers/k-D-40.jpg"
+   "isbn": "9784061475045"
   },
   {
    "id": "k-D-41",
@@ -10652,8 +10647,7 @@
     "9784061228146",
     "9784868070016",
     "9784064073781"
-   ],
-   "cover": "covers/k-E-23.jpg"
+   ]
   },
   {
    "id": "k-E-24",
@@ -10759,8 +10753,7 @@
    "order": 27,
    "isKumonRecommended": true,
    "isNewIn2026": false,
-   "isbn": "9784580814837",
-   "cover": "covers/k-E-27.jpg"
+   "isbn": "9784580814837"
   },
   {
    "id": "k-E-28",
@@ -11233,8 +11226,7 @@
    "order": 45,
    "isKumonRecommended": true,
    "isNewIn2026": false,
-   "isbn": "9784251063410",
-   "cover": "covers/k-E-45.jpg"
+   "isbn": "9784251063410"
   },
   {
    "id": "k-E-46",
@@ -11389,8 +11381,7 @@
     "9784034130209",
     "9784034130308",
     "9784034130407"
-   ],
-   "cover": "covers/k-F-01.jpg"
+   ]
   },
   {
    "id": "k-F-02",
@@ -12829,10 +12820,7 @@
    "order": 7,
    "isKumonRecommended": true,
    "isNewIn2026": false,
-   "isbn": [
-    "9784198613594",
-    "9784828850016"
-   ],
+   "isbn": "9784101315119",
    "cover": "covers/k-G-07.jpg"
   },
   {
@@ -14437,8 +14425,7 @@
     "9784163600857",
     "9784163600956",
     "9784163621609"
-   ],
-   "cover": "covers/k-H-24.jpg"
+   ]
   },
   {
    "id": "k-H-25",
@@ -15639,8 +15626,7 @@
    "order": 24,
    "isKumonRecommended": true,
    "isNewIn2026": false,
-   "isbn": "9784022608024",
-   "cover": "covers/k-I-24.jpg"
+   "isbn": "9784022608024"
   },
   {
    "id": "k-I-25",
@@ -15659,8 +15645,7 @@
    "order": 25,
    "isKumonRecommended": true,
    "isNewIn2026": false,
-   "isbn": "9784121400147",
-   "cover": "covers/k-I-25.jpg"
+   "isbn": "9784121400147"
   },
   {
    "id": "k-I-26",
