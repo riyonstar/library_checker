@@ -93,7 +93,7 @@ async function googleFind(book) {
 async function fromUrl(url) {
   const buf = await get(url, { retries: 1 });
   if (!buf || buf.length < 800) return null;
-  if (sharp) { try { const m = await sharp(buf).metadata(); if (Math.min(m.width, m.height) < 100) return null; return await sharp(buf).resize({ width: 400, height: 400, fit: 'inside', withoutEnlargement: true }).flatten({ background: '#fff' }).jpeg({ quality: 82 }).toBuffer(); } catch { return null; } }
+  if (sharp) { try { const m = await sharp(buf).metadata(); if (Math.min(m.width, m.height) < 100) return null; const out = await sharp(buf).resize({ width: 400, height: 400, fit: 'inside', withoutEnlargement: true }).flatten({ background: '#fff' }).jpeg({ quality: 82 }).toBuffer(); return isBad(await sigOf(out)) ? null : out; } catch { return null; } }
   return buf[0] === 0xff && buf[1] === 0xd8 ? buf : null;
 }
 
@@ -113,7 +113,14 @@ async function candidates(isbn) {
   for (const z of [3, 2, 1]) list.push([gUrl(isbn, z), z]);
   return list;
 }
-const badCovers = new Set();   // 「画像なし」など、複数の本で同じになってしまう画像(sha1)
+// 「画像なし」の代わりの絵は、取得のたびにバイト列が少し違うことがあるので、見た目(16x16の灰色の縮小画像)で比べる
+const badSigs = [];
+async function sigOf(buf) {
+  if (!sharp) return null;
+  try { return [...await sharp(buf).greyscale().resize(16, 16, { fit: 'fill' }).raw().toBuffer()]; } catch { return null; }
+}
+const sigDiff = (a, b) => { let t = 0; for (let i = 0; i < a.length; i++) t += Math.abs(a[i] - b[i]); return t / a.length; };
+const isBad = (sig) => !!sig && badSigs.some((b) => sigDiff(sig, b) < 7);
 async function coverFor(isbns) {
   for (const isbn of isbns.slice(0, 3)) {
     for (const [url, z] of await candidates(isbn)) {
@@ -126,11 +133,11 @@ async function coverFor(isbns) {
           const m = await sharp(buf).metadata();
           if (Math.min(m.width, m.height) < 100) continue;
           const out = await sharp(buf).rotate().resize({ width: 400, height: 400, fit: 'inside', withoutEnlargement: true }).flatten({ background: '#fff' }).jpeg({ quality: 82 }).toBuffer();
-          if (badCovers.has(sha(out))) continue;
+          if (isBad(await sigOf(out))) continue;
           return out;
         } catch { continue; }
       }
-      if (buf[0] === 0xff && buf[1] === 0xd8 && !badCovers.has(sha(buf))) return buf;       // sharp なし: JPEG のみ採用
+      if (buf[0] === 0xff && buf[1] === 0xd8) return buf;       // sharp なし: JPEG のみ採用
     }
   }
   return null;
@@ -163,18 +170,22 @@ export async function main() {
       b.isbn = l.length === 1 ? l[0] : l;
     }
   }
-  // (1) 同じ画像が4冊以上で使われていたら「画像なし」などの代わりの絵とみなし、削除してやり直す
-  const byHash = new Map();
-  for (const f of readdirSync(new URL('./covers/', import.meta.url))) {
-    if (!f.endsWith('.jpg')) continue;
-    const h = sha(readFileSync(new URL('./covers/' + f, import.meta.url)));
-    (byHash.get(h) || byHash.set(h, []).get(h)).push(f);
+  // (1) 「画像なし」の代わりの絵を探して削除する: 前回までに見つけた見本と似ている画像、または、見た目がそっくりな画像が4冊以上あるもの
+  const badFile = new URL('./bad-sigs.json', import.meta.url);
+  if (existsSync(badFile)) badSigs.push(...JSON.parse(readFileSync(badFile, 'utf8')));
+  const covDir = new URL('./covers/', import.meta.url);
+  const sigs = [];
+  for (const f of readdirSync(covDir)) { if (f.endsWith('.jpg')) { const g = await sigOf(readFileSync(new URL(f, covDir))); if (g) sigs.push([f, g]); } }
+  const clusters = [];
+  for (const [f, g] of sigs) {
+    if (isBad(g)) continue;
+    const c = clusters.find((k) => sigDiff(k.rep, g) < 7);
+    if (c) c.files.push(f); else clusters.push({ rep: g, files: [f] });
   }
+  for (const c of clusters) if (c.files.length >= 4) badSigs.push(c.rep);
   let removedPh = 0;
-  for (const [h, files] of byHash) if (files.length >= 4) {
-    badCovers.add(h);
-    for (const f of files) { unlinkSync(new URL('./covers/' + f, import.meta.url)); removedPh++; }
-  }
+  for (const [f, g] of sigs) if (isBad(g)) { unlinkSync(new URL(f, covDir)); removedPh++; }
+  writeFileSync(badFile, JSON.stringify(badSigs));
   if (removedPh) { for (const b of data.books) if (b.cover && !existsSync(new URL('./' + b.cover, import.meta.url))) delete b.cover; console.log(`代わりの絵と思われる画像を ${removedPh} 枚削除しました(取り直します)`); }
   // (2) 英語版(英語でたのしむ福音館の絵本 など)のISBNを除く: openBD の書名に英単語があり、本の書名にはない場合
   const manualIds = existsSync(mf) ? new Set(Object.keys(JSON.parse(readFileSync(mf, 'utf8')))) : new Set();
